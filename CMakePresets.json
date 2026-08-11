@@ -1,0 +1,255 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "installDir": "${sourceDir}/install/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed",
+        "VCPKG_MANIFEST_FEATURES": "cli;tests",
+        "GHIDRAENGINE_BUILD_CLI": "ON",
+        "GHIDRAENGINE_BUILD_TESTS": "ON",
+        "GHIDRAENGINE_BUILD_BENCHMARKS": "OFF"
+      }
+    },
+    {
+      "name": "ninja-base",
+      "hidden": true,
+      "inherits": "base",
+      "generator": "Ninja"
+    },
+    {
+      "name": "windows-base",
+      "hidden": true,
+      "inherits": "ninja-base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
+      }
+    },
+    {
+      "name": "linux-base",
+      "hidden": true,
+      "inherits": "ninja-base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-linux"
+      }
+    },
+    {
+      "name": "macos-base",
+      "hidden": true,
+      "inherits": "ninja-base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "bench-base",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "GHIDRAENGINE_BUILD_BENCHMARKS": "ON",
+        "VCPKG_MANIFEST_FEATURES": "cli;tests;benchmarks"
+      }
+    },
+    {
+      "name": "windows-debug",
+      "displayName": "Windows x64 Debug (Ninja, MSVC)",
+      "inherits": "windows-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "windows-release",
+      "displayName": "Windows x64 Release (Ninja, MSVC)",
+      "inherits": "windows-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "windows-bench",
+      "displayName": "Windows x64 Benchmarks (Ninja, MSVC)",
+      "inherits": ["bench-base", "windows-base"]
+    },
+    {
+      "name": "windows-vs",
+      "displayName": "Windows x64 Visual Studio 2022 (multi-config)",
+      "inherits": "base",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
+      }
+    },
+    {
+      "name": "linux-debug",
+      "displayName": "Linux x64 Debug (Ninja, GCC)",
+      "inherits": "linux-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "linux-release",
+      "displayName": "Linux x64 Release (Ninja, GCC)",
+      "inherits": "linux-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "linux-bench",
+      "displayName": "Linux x64 Benchmarks (Ninja, GCC)",
+      "inherits": ["bench-base", "linux-base"]
+    },
+    {
+      "name": "macos-debug",
+      "displayName": "macOS Debug (Ninja, AppleClang)",
+      "inherits": "macos-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "macos-release",
+      "displayName": "macOS Release (Ninja, AppleClang)",
+      "inherits": "macos-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "macos-bench",
+      "displayName": "macOS Benchmarks (Ninja, AppleClang)",
+      "inherits": ["bench-base", "macos-base"]
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-debug",
+      "configurePreset": "windows-debug",
+      "jobs": 0
+    },
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release",
+      "jobs": 0
+    },
+    {
+      "name": "windows-bench",
+      "configurePreset": "windows-bench",
+      "jobs": 0
+    },
+    {
+      "name": "windows-vs",
+      "configurePreset": "windows-vs",
+      "configuration": "RelWithDebInfo",
+      "jobs": 0
+    },
+    {
+      "name": "linux-debug",
+      "configurePreset": "linux-debug",
+      "jobs": 0
+    },
+    {
+      "name": "linux-release",
+      "configurePreset": "linux-release",
+      "jobs": 0
+    },
+    {
+      "name": "linux-bench",
+      "configurePreset": "linux-bench",
+      "jobs": 0
+    },
+    {
+      "name": "macos-debug",
+      "configurePreset": "macos-debug",
+      "jobs": 0
+    },
+    {
+      "name": "macos-release",
+      "configurePreset": "macos-release",
+      "jobs": 0
+    },
+    {
+      "name": "macos-bench",
+      "configurePreset": "macos-bench",
+      "jobs": 0
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "test-base",
+      "hidden": true,
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "windows-debug",
+      "inherits": "test-base",
+      "configurePreset": "windows-debug"
+    },
+    {
+      "name": "windows-release",
+      "inherits": "test-base",
+      "configurePreset": "windows-release"
+    },
+    {
+      "name": "windows-vs",
+      "inherits": "test-base",
+      "configurePreset": "windows-vs",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "linux-debug",
+      "inherits": "test-base",
+      "configurePreset": "linux-debug"
+    },
+    {
+      "name": "linux-release",
+      "inherits": "test-base",
+      "configurePreset": "linux-release"
+    },
+    {
+      "name": "macos-debug",
+      "inherits": "test-base",
+      "configurePreset": "macos-debug"
+    },
+    {
+      "name": "macos-release",
+      "inherits": "test-base",
+      "configurePreset": "macos-release"
+    }
+  ]
+}

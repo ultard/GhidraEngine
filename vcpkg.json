@@ -1,0 +1,41 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "ghidraengine",
+  "version": "0.1.0",
+  "description": "High-performance duplicate photo and video finder",
+  "dependencies": [
+    {
+      "name": "ffmpeg",
+      "default-features": false,
+      "features": [
+        "avcodec",
+        "avformat",
+        "swscale"
+      ]
+    },
+    "libjpeg-turbo",
+    "xxhash",
+    "sqlite3"
+  ],
+  "features": {
+    "cli": {
+      "description": "Command line tool",
+      "dependencies": [
+        "cli11",
+        "nlohmann-json"
+      ]
+    },
+    "tests": {
+      "description": "Unit tests",
+      "dependencies": [
+        "catch2"
+      ]
+    },
+    "benchmarks": {
+      "description": "Micro benchmarks",
+      "dependencies": [
+        "benchmark"
+      ]
+    }
+  }
+}

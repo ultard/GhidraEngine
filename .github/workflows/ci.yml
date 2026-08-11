@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+jobs:
+  build:
+    name: ${{ matrix.preset }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            preset: linux-release
+            vcpkg_cache: ~/.cache/vcpkg/archives
+            triplet: x64-linux
+          - os: windows-latest
+            preset: windows-vs
+            vcpkg_cache: ~\AppData\Local\vcpkg\archives
+            triplet: x64-windows
+          - os: macos-latest
+            preset: macos-release
+            vcpkg_cache: ~/.cache/vcpkg/archives
+            triplet: arm64-osx
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build nasm autoconf automake libtool pkg-config
+
+      - name: Install build deps
+        if: runner.os == 'macOS'
+        run: brew install ninja nasm
+
+      - name: Point presets at vcpkg
+        shell: bash
+        run: |
+          # Not every runner image ships vcpkg (macOS arm64 has dropped it before).
+          if [ -z "$VCPKG_INSTALLATION_ROOT" ]; then
+            git clone --depth 1 https://github.com/microsoft/vcpkg "$RUNNER_TEMP/vcpkg"
+            "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+            VCPKG_INSTALLATION_ROOT="$RUNNER_TEMP/vcpkg"
+          fi
+          echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
+
+      - name: Cache vcpkg binaries
+        uses: actions/cache@v6
+        with:
+          path: ${{ matrix.vcpkg_cache }}
+          key: vcpkg-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-${{ matrix.triplet }}-
+
+      - run: cmake --preset ${{ matrix.preset }}
+      - run: cmake --build --preset ${{ matrix.preset }}
+      - run: ctest --preset ${{ matrix.preset }}
+
+      - name: Package
+        shell: bash
+        run: |
+          cmake --install build/${{ matrix.preset }} --config RelWithDebInfo --prefix dist
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp build/vcpkg_installed/${{ matrix.triplet }}/bin/*.dll dist/bin/
+          fi
+          cmake -E chdir dist cmake -E tar cf ../ghidraengine-${{ matrix.triplet }}.zip --format=zip .
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ghidraengine-${{ matrix.triplet }}
+          path: ghidraengine-${{ matrix.triplet }}.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: artifacts/*.zip
+          generate_release_notes: true
