@@ -45,7 +45,8 @@ struct ImageMatchConfig {
     // when both images carry colour; 255 disables the check.
     std::uint32_t color_threshold = 24;
 
-    // Hash all 8 dihedral orientations and keep the canonical one.
+    // Rotate the thumbnail to a canonical orientation before hashing, so the 8
+    // rotations and mirrors of one picture all hash the same.
     bool dihedral_invariant = false;
 
     // Images smaller than this on either axis carry too little signal.

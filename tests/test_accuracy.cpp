@@ -128,13 +128,18 @@ TEST_CASE("rotations match only when dihedral invariance is enabled", "[accuracy
     const ImageSignature rotated_plain = signature_of(rotate_90(original), 92, plain);
     CHECK_FALSE(images_match(upright_plain, rotated_plain, plain));
 
-    const ImageSignature upright = signature_of(original, 92, invariant);
-    const ImageSignature rotated = signature_of(rotate_90(original), 92, invariant);
-    const ImageSignature mirrored = signature_of(mirror_horizontal(original), 92, invariant);
+    for (const std::uint32_t seed : {2024U, 11U, 512U, 7331U, 99991U}) {
+        const Image source = make_image(900, 900, seed);
+        const ImageSignature upright = signature_of(source, 92, invariant);
+        const ImageSignature rotated = signature_of(rotate_90(source), 92, invariant);
+        const ImageSignature mirrored = signature_of(mirror_horizontal(source), 92, invariant);
 
-    INFO("rotated distance " << hamming_distance(upright.phash64, rotated.phash64));
-    CHECK(images_match(upright, rotated, invariant));
-    CHECK(images_match(upright, mirrored, invariant));
+        INFO("seed " << seed << ", rotated distance "
+                     << hamming_distance(upright.phash64, rotated.phash64) << ", mirrored distance "
+                     << hamming_distance(upright.phash64, mirrored.phash64));
+        CHECK(images_match(upright, rotated, invariant));
+        CHECK(images_match(upright, mirrored, invariant));
+    }
 }
 
 TEST_CASE("the colour check rejects images that agree only in grayscale", "[accuracy]") {

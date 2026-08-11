@@ -17,8 +17,6 @@ constexpr std::size_t kThumbPixels = kThumbSize * kThumbSize;
 
 using GrayBuffer = std::array<std::uint8_t, kThumbPixels>;
 
-// AC only: the DC term encodes average brightness, exactly what a perceptual hash
-// must ignore, and leaving it in would move the median whenever exposure changed.
 float ac_median(const float* coefficients, std::size_t block, std::size_t stride) {
     std::array<float, kDctOutputSize * kDctOutputSize> values{};
     std::size_t count = 0;
@@ -46,7 +44,7 @@ std::uint64_t extract_phash64(const float* coefficients) {
             }
         }
     }
-    return hash; // the DC bit is constant, so 63 bits carry the signal
+    return hash;
 }
 
 Hash256 extract_phash256(const float* coefficients) {
@@ -63,8 +61,6 @@ Hash256 extract_phash256(const float* coefficients) {
     return hash;
 }
 
-// Area-average, not point sampling: point sampling makes the hash sensitive to
-// which pixels land on the grid, the aliasing that separates two encodes.
 void box_resample(std::span<const std::uint8_t> source, std::size_t width, std::size_t height,
                   std::uint8_t* destination) {
     for (std::size_t row = 0; row < height; ++row) {
@@ -88,7 +84,6 @@ void box_resample(std::span<const std::uint8_t> source, std::size_t width, std::
 }
 
 std::uint64_t extract_dhash64(std::span<const std::uint8_t> gray) {
-    // 9 columns x 8 rows yields 8 horizontal comparisons per row = 64 bits.
     std::array<std::uint8_t, 9 * 8> small{};
     box_resample(gray, 9, 8, small.data());
 
@@ -129,26 +124,34 @@ std::array<std::uint8_t, kColorMomentBytes> extract_color_moments(
     return moments;
 }
 
-// The 8 symmetries of a square, applied to the 32x32 buffer already in L1.
-void apply_dihedral(std::span<const std::uint8_t> source, std::size_t variant,
+void apply_dihedral(const std::uint8_t* source, std::size_t size, std::size_t variant,
                     std::uint8_t* destination) {
-    for (std::size_t y = 0; y < kThumbSize; ++y) {
-        for (std::size_t x = 0; x < kThumbSize; ++x) {
+    for (std::size_t y = 0; y < size; ++y) {
+        for (std::size_t x = 0; x < size; ++x) {
             std::size_t sx = x;
             std::size_t sy = y;
             switch (variant) {
-                case 0: break;                                            // identity
-                case 1: sx = kThumbSize - 1 - x; break;                   // mirror X
-                case 2: sy = kThumbSize - 1 - y; break;                   // mirror Y
-                case 3: sx = kThumbSize - 1 - x; sy = kThumbSize - 1 - y; break; // 180
-                case 4: sx = y; sy = x; break;                            // transpose
-                case 5: sx = y; sy = kThumbSize - 1 - x; break;           // rotate 90
-                case 6: sx = kThumbSize - 1 - y; sy = x; break;           // rotate 270
-                default: sx = kThumbSize - 1 - y; sy = kThumbSize - 1 - x; break; // anti-transpose
+                case 0: break;                                       // identity
+                case 1: sx = size - 1 - x; break;                    // mirror X
+                case 2: sy = size - 1 - y; break;                    // mirror Y
+                case 3: sx = size - 1 - x; sy = size - 1 - y; break; // 180
+                case 4: sx = y; sy = x; break;                       // transpose
+                case 5: sx = y; sy = size - 1 - x; break;            // rotate 90
+                case 6: sx = size - 1 - y; sy = x; break;            // rotate 270
+                default: sx = size - 1 - y; sy = size - 1 - x; break; // anti-transpose
             }
-            destination[y * kThumbSize + x] = source[sy * kThumbSize + sx];
+            destination[y * size + x] = source[sy * size + sx];
         }
     }
+}
+
+std::size_t canonical_variant(const float* coefficients) {
+    const float gx = coefficients[1];                 // C(0,1), horizontal
+    const float gy = coefficients[kDctOutputSize];    // C(1,0), vertical
+    const bool transpose = std::abs(gx) < std::abs(gy);
+    const float first = transpose ? gy : gx;
+    const float second = transpose ? gx : gy;
+    return (transpose ? 4U : 0U) + (first < 0.0F ? 1U : 0U) + (second < 0.0F ? 2U : 0U);
 }
 
 void to_float(std::span<const std::uint8_t> source, float* destination) {
@@ -174,8 +177,6 @@ double luma_variance(std::span<const std::uint8_t> gray) noexcept {
     if (gray.empty()) {
         return 0.0;
     }
-    // Two-pass: the sum-of-squares shortcut loses precision on near-flat frames,
-    // which is exactly the case this function exists to detect.
     double mean = 0.0;
     for (const std::uint8_t value : gray) {
         mean += value;
@@ -209,68 +210,37 @@ ImageSignature compute_signature(const Thumbnail& thumb, const ImageMatchConfig&
     alignas(64) float coefficients[kDctOutputCount];
     const Dct16Fn transform = dct16();
 
-    if (!config.dihedral_invariant) {
-        to_float(thumb.gray, input);
-        transform(input, coefficients);
-        signature.phash64 = extract_phash64(coefficients);
-        signature.phash256 = extract_phash256(coefficients);
-        signature.dhash64 = extract_dhash64(thumb.gray);
-        if (thumb.has_color) {
-            signature.color = extract_color_moments(thumb.cb, thumb.cr);
-        }
-        return signature;
-    }
+    to_float(thumb.gray, input);
+    transform(input, coefficients);
 
-    // Canonical orientation = smallest 64-bit hash. Arbitrary but stable, so two
-    // files differing only by rotation land on the same variant.
-    GrayBuffer best_gray{};
-    alignas(64) float best_coefficients[kDctOutputCount];
-    std::uint64_t best_hash = 0;
-    std::size_t best_variant = 0;
+    std::span<const std::uint8_t> gray{thumb.gray};
     GrayBuffer rotated{};
+    std::size_t variant = 0;
 
-    for (std::size_t variant = 0; variant < 8; ++variant) {
-        apply_dihedral(thumb.gray, variant, rotated.data());
-        to_float(rotated, input);
-        transform(input, coefficients);
-        const std::uint64_t hash = extract_phash64(coefficients);
-
-        if (variant == 0 || hash < best_hash) {
-            best_hash = hash;
-            best_variant = variant;
-            best_gray = rotated;
-            std::memcpy(best_coefficients, coefficients, sizeof(coefficients));
+    if (config.dihedral_invariant) {
+        variant = canonical_variant(coefficients);
+        if (variant != 0) {
+            apply_dihedral(thumb.gray.data(), kThumbSize, variant, rotated.data());
+            gray = rotated;
+            to_float(gray, input);
+            transform(input, coefficients);
         }
     }
 
-    signature.phash64 = best_hash;
-    signature.phash256 = extract_phash256(best_coefficients);
-    signature.dhash64 = extract_dhash64(best_gray);
+    signature.phash64 = extract_phash64(coefficients);
+    signature.phash256 = extract_phash256(coefficients);
+    signature.dhash64 = extract_dhash64(gray);
 
     if (thumb.has_color) {
-        // Chroma follows the same symmetry, or a rotated copy would match on luma
-        // and then be rejected by the colour check.
-        std::array<std::uint8_t, kChromaSize * kChromaSize> cb{};
-        std::array<std::uint8_t, kChromaSize * kChromaSize> cr{};
-        for (std::size_t y = 0; y < kChromaSize; ++y) {
-            for (std::size_t x = 0; x < kChromaSize; ++x) {
-                std::size_t sx = x;
-                std::size_t sy = y;
-                switch (best_variant) {
-                    case 0: break;
-                    case 1: sx = kChromaSize - 1 - x; break;
-                    case 2: sy = kChromaSize - 1 - y; break;
-                    case 3: sx = kChromaSize - 1 - x; sy = kChromaSize - 1 - y; break;
-                    case 4: sx = y; sy = x; break;
-                    case 5: sx = y; sy = kChromaSize - 1 - x; break;
-                    case 6: sx = kChromaSize - 1 - y; sy = x; break;
-                    default: sx = kChromaSize - 1 - y; sy = kChromaSize - 1 - x; break;
-                }
-                cb[y * kChromaSize + x] = thumb.cb[sy * kChromaSize + sx];
-                cr[y * kChromaSize + x] = thumb.cr[sy * kChromaSize + sx];
-            }
+        if (variant == 0) {
+            signature.color = extract_color_moments(thumb.cb, thumb.cr);
+        } else {
+            std::array<std::uint8_t, kChromaSize * kChromaSize> cb{};
+            std::array<std::uint8_t, kChromaSize * kChromaSize> cr{};
+            apply_dihedral(thumb.cb.data(), kChromaSize, variant, cb.data());
+            apply_dihedral(thumb.cr.data(), kChromaSize, variant, cr.data());
+            signature.color = extract_color_moments(cb, cr);
         }
-        signature.color = extract_color_moments(cb, cr);
     }
 
     return signature;
@@ -287,7 +257,6 @@ std::uint32_t hamming_distance(const Hash256& a, const Hash256& b) noexcept {
 
 bool images_match(const ImageSignature& a, const ImageSignature& b,
                   const ImageMatchConfig& config) noexcept {
-    // Cheapest first: one popcount rejects the overwhelming majority of pairs.
     if (hamming_distance(a.phash64, b.phash64) > config.phash_threshold) {
         return false;
     }
@@ -299,7 +268,6 @@ bool images_match(const ImageSignature& a, const ImageSignature& b,
         hamming_distance(a.dhash64, b.dhash64) > config.dhash_threshold) {
         return false;
     }
-    // A grayscale scan of a colour photo is still the same picture.
     if (config.color_threshold < 255 && a.has_color && b.has_color &&
         color_distance(a.color, b.color) > config.color_threshold) {
         return false;
