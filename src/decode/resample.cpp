@@ -51,13 +51,13 @@ void box_resample_channel(const std::uint8_t* source, std::size_t source_width,
     for (std::size_t out_y = 0; out_y < dst_height; ++out_y) {
         std::fill(accumulator.begin(), accumulator.end(), 0U);
 
-        const std::size_t y0 = rows[out_y];
+        const std::size_t y0 = std::min(rows[out_y], source_height - 1);
         const std::size_t y1 = std::max(y0 + 1, rows[out_y + 1]);
 
         for (std::size_t y = y0; y < y1 && y < source_height; ++y) {
             const std::uint8_t* row = source + y * source_stride + channel_index;
             for (std::size_t out_x = 0; out_x < dst_width; ++out_x) {
-                const std::size_t x0 = cols[out_x];
+                const std::size_t x0 = std::min(cols[out_x], source_width - 1);
                 const std::size_t x1 = std::max(x0 + 1, cols[out_x + 1]);
                 std::uint32_t sum = 0;
                 for (std::size_t x = x0; x < x1 && x < source_width; ++x) {

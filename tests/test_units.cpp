@@ -14,6 +14,7 @@
 #include "core/enumerate.hpp"
 #include "core/glob.hpp"
 #include "core/thread_pool.hpp"
+#include "decode/resample.hpp"
 #include "hash/dct.hpp"
 #include "index/cluster.hpp"
 #include "index/mih_index.hpp"
@@ -47,6 +48,22 @@ TEST_CASE("glob matching", "[glob]") {
     SECTION("pathological patterns terminate") {
         CHECK_FALSE(glob_match("*a*a*a*a*a*a*b", std::string(64, 'a')));
     }
+}
+
+TEST_CASE("resampling a source smaller than the destination", "[resample]") {
+    // A tiny JPEG (below 32 px) leaves the trailing bands empty; dividing by an
+    // empty band used to kill the process with an integer divide-by-zero.
+    const std::uint8_t source[6] = {10, 20, 30, 40, 50, 60};
+    std::array<std::uint8_t, kThumbSize * kThumbSize> destination{};
+
+    box_resample_channel(source, 3, 2, 3, 1, 0, destination.data(), kThumbSize, kThumbSize);
+
+    CHECK(destination[0] == 10);
+    CHECK(destination[kThumbSize * kThumbSize - 1] == 60);
+
+    std::array<std::uint8_t, 1> single{};
+    box_resample_channel(source, 1, 1, 1, 1, 0, single.data(), 1, 1);
+    CHECK(single[0] == 10);
 }
 
 TEST_CASE("format identification from magic bytes", "[magic]") {
