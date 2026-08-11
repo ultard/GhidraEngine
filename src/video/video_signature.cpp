@@ -11,11 +11,8 @@
 namespace ghidraengine {
 namespace {
 
-// Keyframe-only demuxing usually yields a frame on the first packet; the slack
-// covers codecs that need a parameter-set packet first.
 constexpr int kMaxPacketsPerSeek = 24;
 
-// Fades and black frames hash to values matching every other flat frame.
 constexpr int kMaxVarianceRetries = 3;
 
 std::int64_t container_duration_ms(const AVFormatContext& context, const AVStream& stream) {
@@ -40,7 +37,6 @@ Result<Decoder> open_video(const std::filesystem::path& path) {
     init_ffmpeg();
 
     AVFormatContext* raw = nullptr;
-    // FFmpeg expects UTF-8 and widens it internally on Windows.
     const std::string utf8 = platform::to_utf8(path);
 
     if (const int status = avformat_open_input(&raw, utf8.c_str(), nullptr, nullptr);
@@ -61,8 +57,6 @@ Result<Decoder> open_video(const std::filesystem::path& path) {
 
     AVStream* stream = context->streams[index];
 
-    // Cover art presents as a single-frame video stream and would match all other
-    // cover art indiscriminately.
     if ((stream->disposition & AV_DISPOSITION_ATTACHED_PIC) != 0) {
         return Error{ErrorCode::UnsupportedFormat, "video stream is attached cover art"};
     }
@@ -82,7 +76,6 @@ Result<Decoder> open_video(const std::filesystem::path& path) {
     }
 
     decoder->thread_count = 1;
-    // A partially corrupt video still yields a signature from surviving keyframes.
     decoder->flags2 |= AV_CODEC_FLAG2_FAST;
     decoder->skip_loop_filter = AVDISCARD_NONREF;
 
@@ -90,7 +83,7 @@ Result<Decoder> open_video(const std::filesystem::path& path) {
         return ffmpeg_error(status, "open decoder");
     }
 
-    stream->discard = AVDISCARD_NONKEY; // dropped before reaching the decoder
+    stream->discard = AVDISCARD_NONKEY;
 
     Decoder result;
     result.context = std::move(context);
@@ -100,7 +93,6 @@ Result<Decoder> open_video(const std::filesystem::path& path) {
     return Result<Decoder>{std::move(result)};
 }
 
-// Seeks to `timestamp_ms` and decodes the first keyframe at or before it.
 bool grab_frame_at(Decoder& decoder, std::int64_t timestamp_ms, AVPacket* packet,
                    AVFrame* frame) {
     const std::int64_t target = av_rescale_q(timestamp_ms, AVRational{1, 1000},
@@ -131,14 +123,13 @@ bool grab_frame_at(Decoder& decoder, std::int64_t timestamp_ms, AVPacket* packet
         }
     }
 
-    // The decoder may still be holding the frame.
     avcodec_send_packet(decoder.codec.get(), nullptr);
     const bool flushed = avcodec_receive_frame(decoder.codec.get(), frame) == 0;
     avcodec_flush_buffers(decoder.codec.get());
     return flushed;
 }
 
-} // namespace
+}
 
 Result<VideoSignature> extract_video_signature(const std::filesystem::path& path,
                                                const VideoMatchConfig& config) {
@@ -166,14 +157,11 @@ Result<VideoSignature> extract_video_signature(const std::filesystem::path& path
     const std::uint32_t requested =
         std::min<std::uint32_t>(config.frame_samples, static_cast<std::uint32_t>(kMaxVideoFrames));
 
-    // Head and tail are skipped: intros, fades and credits look alike across
-    // unrelated videos.
     const double span = 1.0 - 2.0 * config.edge_skip_fraction;
     std::vector<std::int64_t> timestamps;
     timestamps.reserve(requested);
 
     if (signature.duration_ms <= 0) {
-        // Damaged container: take whatever keyframes appear from the start.
         for (std::uint32_t i = 0; i < requested; ++i) {
             timestamps.push_back(static_cast<std::int64_t>(i) * 1000);
         }
@@ -187,7 +175,7 @@ Result<VideoSignature> extract_video_signature(const std::filesystem::path& path
         }
     }
 
-    const std::int64_t retry_step = // nudge when a sample lands on a flat frame
+    const std::int64_t retry_step =
         signature.duration_ms > 0
             ? std::max<std::int64_t>(1, signature.duration_ms / (requested * 8 + 1))
             : 500;
@@ -214,7 +202,7 @@ Result<VideoSignature> extract_video_signature(const std::filesystem::path& path
             av_frame_unref(frame.get());
 
             if (luma_variance(thumb.gray) < config.min_frame_variance) {
-                continue; // flat frame; try slightly later
+                continue;
             }
 
             signature.frames[collected++] = phash64_of_gray(thumb.gray);
@@ -238,4 +226,4 @@ Result<VideoSignature> extract_video_signature(const std::filesystem::path& path
     return signature;
 }
 
-} // namespace ghidraengine
+}

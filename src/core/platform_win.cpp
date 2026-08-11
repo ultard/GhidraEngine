@@ -22,7 +22,7 @@
 namespace ghidraengine::platform {
 namespace {
 
-constexpr std::int64_t kFiletimeEpochOffset = 116444736000000000LL; // 1601 -> 1970, in 100ns
+constexpr std::int64_t kFiletimeEpochOffset = 116444736000000000LL;
 
 std::int64_t filetime_to_unix_ns(const FILETIME& ft) {
     const std::int64_t ticks =
@@ -34,8 +34,6 @@ std::uint64_t combine(DWORD high, DWORD low) {
     return (static_cast<std::uint64_t>(high) << 32) | low;
 }
 
-// \\?\ lifts MAX_PATH, but requires a fully qualified path with no forward
-// slashes or relative components.
 std::wstring extended_path(const std::filesystem::path& path) {
     std::wstring native = path.native();
     if (native.size() < MAX_PATH) {
@@ -98,7 +96,7 @@ std::string message_for(DWORD code) {
     return utf8;
 }
 
-} // namespace
+}
 
 Error last_error(std::string_view context) {
     const DWORD code = ::GetLastError();
@@ -129,7 +127,6 @@ void File::close() noexcept {
 
 Result<File> File::open_read(const std::filesystem::path& path, bool sequential) {
     const DWORD flags = sequential ? FILE_FLAG_SEQUENTIAL_SCAN : FILE_FLAG_RANDOM_ACCESS;
-    // FILE_SHARE_DELETE: a scan must not block the user from moving or deleting.
     HANDLE handle = ::CreateFileW(
         extended_path(path).c_str(), GENERIC_READ,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
@@ -167,7 +164,7 @@ Result<std::size_t> File::read_at(std::uint64_t offset, std::span<std::uint8_t> 
             return last_error("read");
         }
         if (read == 0) {
-            break; // end of file
+            break;
         }
         total += read;
     }
@@ -183,8 +180,6 @@ Result<std::uint64_t> File::size() const {
 }
 
 Result<FileIdentity> File::identity() const {
-    // FILE_ID_INFO carries the 128-bit ReFS id; the 64-bit
-    // BY_HANDLE_FILE_INFORMATION is the fallback where it is unavailable.
     FILE_ID_INFO info{};
     if (::GetFileInformationByHandleEx(static_cast<HANDLE>(handle_), FileIdInfo, &info,
                                        sizeof(info))) {
@@ -216,15 +211,13 @@ Result<void> list_directory(const std::filesystem::path& dir, std::vector<DirEnt
     pattern.push_back(L'*');
 
     WIN32_FIND_DATAW data{};
-    // FindExInfoBasic skips 8.3 name lookup, LARGE_FETCH batches the reads:
-    // together worth roughly 20-30% on large trees.
     HANDLE find = ::FindFirstFileExW(pattern.c_str(), FindExInfoBasic, &data,
                                      FindExSearchNameMatch, nullptr,
                                      FIND_FIRST_EX_LARGE_FETCH);
     if (find == INVALID_HANDLE_VALUE) {
         const DWORD code = ::GetLastError();
         if (code == ERROR_FILE_NOT_FOUND) {
-            return {}; // empty directory
+            return {};
         }
         return last_error("list " + to_utf8(dir));
     }
@@ -275,7 +268,7 @@ Result<FileIdentity> identity_of(const std::filesystem::path& path) {
     HANDLE handle = ::CreateFileW(
         extended_path(path).c_str(), 0,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
-        FILE_FLAG_BACKUP_SEMANTICS, nullptr); // BACKUP_SEMANTICS to open directories
+        FILE_FLAG_BACKUP_SEMANTICS, nullptr);
     if (handle == INVALID_HANDLE_VALUE) {
         return last_error("identify " + to_utf8(path));
     }
@@ -304,8 +297,6 @@ Result<FileIdentity> identity_of(const std::filesystem::path& path) {
 }
 
 bool is_rotational_storage(const std::filesystem::path& path) {
-    // Cached per volume: the ioctl opens a device handle, far too expensive to
-    // repeat per file.
     static std::mutex mutex;
     static std::unordered_map<std::wstring, bool> cache;
 
@@ -316,7 +307,7 @@ bool is_rotational_storage(const std::filesystem::path& path) {
     }
     const std::wstring root = absolute.root_name().native();
     if (root.empty()) {
-        return false; // UNC share or unknown: assume no seek penalty
+        return false;
     }
 
     {
@@ -381,6 +372,6 @@ std::filesystem::path from_utf8(std::string_view utf8) {
     return std::filesystem::path(std::move(wide));
 }
 
-} // namespace ghidraengine::platform
+}
 
-#endif // _WIN32
+#endif

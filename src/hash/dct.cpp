@@ -64,8 +64,7 @@ CpuFeatures detect_cpu() noexcept {
         return features;
     }
 
-    // The OS must have enabled AVX state, not just the CPU support it: otherwise
-    // ymm registers are not preserved across context switches.
+    // The OS must have enabled AVX state, not just the CPU support it.
     std::uint64_t xcr0 = 0;
 #if defined(_MSC_VER)
     xcr0 = _xgetbv(0);
@@ -77,7 +76,7 @@ CpuFeatures detect_cpu() noexcept {
         xcr0 = (static_cast<std::uint64_t>(high) << 32) | low;
     }
 #endif
-    if ((xcr0 & 0x6) != 0x6) { // XMM and YMM state
+    if ((xcr0 & 0x6) != 0x6) {
         return features;
     }
 
@@ -86,7 +85,7 @@ CpuFeatures detect_cpu() noexcept {
     return features;
 }
 
-#endif // GHIDRAENGINE_X86_SIMD
+#endif
 
 SimdBackend resolve_backend() noexcept {
 #if defined(GHIDRAENGINE_X86_SIMD)
@@ -98,7 +97,7 @@ SimdBackend resolve_backend() noexcept {
         return SimdBackend::Sse2;
     }
 #elif defined(GHIDRAENGINE_NEON_SIMD)
-    return SimdBackend::Neon; // baseline on AArch64
+    return SimdBackend::Neon;
 #endif
     return SimdBackend::Scalar;
 }
@@ -121,7 +120,7 @@ Dct16Fn resolve_kernel(SimdBackend backend) noexcept {
     return &dct16_scalar;
 }
 
-} // namespace
+}
 
 const DctTables& dct_tables() noexcept {
     static const DctTables tables = build_tables();
@@ -148,4 +147,4 @@ Dct16Fn dct16() noexcept {
     return kernel;
 }
 
-} // namespace ghidraengine
+}

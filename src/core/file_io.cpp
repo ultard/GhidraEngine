@@ -14,7 +14,7 @@ Result<std::size_t> read_header(const platform::File& file,
 Result<void> read_entire_file(const std::filesystem::path& path,
                               std::vector<std::uint8_t>& buffer,
                               std::uint64_t max_size) {
-    auto file = platform::File::open_read(path, /*sequential=*/true);
+    auto file = platform::File::open_read(path, true);
     if (!file) {
         return file.error();
     }
@@ -42,4 +42,4 @@ Result<void> read_entire_file(const std::filesystem::path& path,
     return {};
 }
 
-} // namespace ghidraengine
+}

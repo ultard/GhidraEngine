@@ -18,9 +18,8 @@ namespace {
 
 ScanConfig test_config(const std::filesystem::path& cache_dir) {
     ScanConfig config;
-    // Fixtures are small; the production floor of 4 KiB would filter them out.
     config.min_file_size = 0;
-    config.cache.enabled = true; // off by default, on here so the cache tests exercise it
+    config.cache.enabled = true;
     config.cache.path = cache_dir / "cache.db";
     config.concurrency.cpu_threads = 4;
     return config;
@@ -42,7 +41,7 @@ const Cluster* find_cluster_with(const Report& report, const std::string& name) 
     return nullptr;
 }
 
-} // namespace
+}
 
 TEST_CASE("exact duplicates are found across directories", "[scan]") {
     TempDir dir;
@@ -51,7 +50,7 @@ TEST_CASE("exact duplicates are found across directories", "[scan]") {
     const auto other = encode_jpeg(make_image(600, 400, 22), 90);
 
     write_file(dir.path() / "a" / "original.jpg", photo);
-    write_file(dir.path() / "b" / "copy.jpg", photo);       // byte-identical
+    write_file(dir.path() / "b" / "copy.jpg", photo);
     write_file(dir.path() / "b" / "nested" / "copy2.jpg", photo);
     write_file(dir.path() / "a" / "different.jpg", other);
 
@@ -71,7 +70,6 @@ TEST_CASE("exact duplicates are found across directories", "[scan]") {
     CHECK(cluster_contains(*report, *cluster, "copy2.jpg"));
     CHECK_FALSE(cluster_contains(*report, *cluster, "different.jpg"));
 
-    // Two of the three are redundant.
     CHECK(cluster->reclaimable_bytes == photo.size() * 2);
 }
 
@@ -80,7 +78,7 @@ TEST_CASE("a file with a unique size never reaches the hasher", "[scan]") {
 
     const Image image = make_image(500, 500, 5);
     write_file(dir.path() / "one.jpg", encode_jpeg(image, 90));
-    write_file(dir.path() / "two.jpg", encode_jpeg(image, 60)); // different size
+    write_file(dir.path() / "two.jpg", encode_jpeg(image, 60));
 
     ScanConfig config = test_config(dir.path());
     config.detect_similar = false;
@@ -105,7 +103,7 @@ TEST_CASE("perceptually similar images are grouped", "[scan]") {
     write_file(dir.path() / "unrelated.jpg", encode_jpeg(make_image(1000, 750, 999), 95));
 
     ScanConfig config = test_config(dir.path());
-    config.cluster_mode = ClusterMode::Transitive; // one group for all variants
+    config.cluster_mode = ClusterMode::Transitive;
 
     Scanner scanner(config);
     const std::vector<std::filesystem::path> roots = {dir.path()};
@@ -120,7 +118,6 @@ TEST_CASE("perceptually similar images are grouped", "[scan]") {
     CHECK(cluster_contains(*report, *cluster, "resized.jpg"));
     CHECK_FALSE(cluster_contains(*report, *cluster, "unrelated.jpg"));
 
-    // The full-resolution original is the one worth keeping.
     CHECK(report->files[cluster->keeper].path.filename() == "original.jpg");
 }
 
@@ -152,7 +149,6 @@ TEST_CASE("exclusion patterns and size filters are honoured", "[scan]") {
 TEST_CASE("a non-media file is ignored even with a media extension", "[scan]") {
     TempDir dir;
 
-    // Classification is by content, so this must not be mistaken for an image.
     const std::string text = "this is definitely not a JPEG, whatever the name says";
     std::vector<std::uint8_t> bytes(text.begin(), text.end());
     write_file(dir.path() / "fake1.jpg", bytes);
@@ -193,7 +189,6 @@ TEST_CASE("the cache makes a second scan free", "[scan][cache]") {
         Scanner scanner(config);
         auto report = scanner.scan(roots);
         REQUIRE(report.has_value());
-        // Nothing changed on disk, so nothing may be decoded again.
         CHECK(report->stats.images_decoded == 0);
         CHECK(report->stats.cache_hits == 8);
     }
@@ -208,6 +203,183 @@ TEST_CASE("the cache makes a second scan free", "[scan][cache]") {
         CHECK(report->stats.images_decoded == 1);
         CHECK(report->stats.cache_hits == 7);
     }
+}
+
+TEST_CASE("a cached row is not reused by a scan asking a different question",
+          "[scan][cache]") {
+    TempDir dir;
+
+    const Image original = make_image(800, 600, 77);
+    write_file(dir.path() / "original.jpg", encode_jpeg(original, 95));
+    write_file(dir.path() / "recompressed.jpg", encode_jpeg(original, 55));
+
+    const std::vector<std::filesystem::path> roots = {dir.path()};
+
+    SECTION("an exact-only scan does not poison the similar pass that follows") {
+        ScanConfig exact_only = test_config(dir.path());
+        exact_only.detect_similar = false;
+        {
+            Scanner scanner(exact_only);
+            auto report = scanner.scan(roots);
+            REQUIRE(report.has_value());
+            CHECK(report->stats.images_decoded == 0);
+        }
+
+        ScanConfig full = test_config(dir.path());
+        Scanner scanner(full);
+        auto report = scanner.scan(roots);
+        REQUIRE(report.has_value());
+
+        CHECK(report->stats.cache_hits == 0);
+        CHECK(report->stats.images_decoded == 2);
+        REQUIRE(report->clusters.size() == 1);
+        CHECK(report->clusters[0].kind == MatchKind::Similar);
+    }
+
+    SECTION("toggling dihedral invariance invalidates the stored hashes") {
+        ScanConfig plain = test_config(dir.path());
+        {
+            Scanner scanner(plain);
+            auto report = scanner.scan(roots);
+            REQUIRE(report.has_value());
+            CHECK(report->stats.cache_hits == 0);
+        }
+
+        ScanConfig rotated = test_config(dir.path());
+        rotated.image.dihedral_invariant = true;
+
+        Scanner scanner(rotated);
+        auto report = scanner.scan(roots);
+        REQUIRE(report.has_value());
+        CHECK(report->stats.cache_hits == 0);
+        CHECK(report->stats.images_decoded == 2);
+    }
+
+    SECTION("an unchanged configuration still hits") {
+        ScanConfig config = test_config(dir.path());
+        {
+            Scanner scanner(config);
+            REQUIRE(scanner.scan(roots).has_value());
+        }
+        Scanner scanner(config);
+        auto report = scanner.scan(roots);
+        REQUIRE(report.has_value());
+        CHECK(report->stats.cache_hits == 2);
+    }
+}
+
+TEST_CASE("an exact-only scan never reads the middle of a file", "[scan]") {
+    TempDir dir;
+
+    const Image big = make_image(3000, 2000, 41);
+    const auto photo = encode_jpeg(big, 98);
+    REQUIRE(photo.size() > 2 * kPartialHashChunk);
+
+    write_file(dir.path() / "a.jpg", photo);
+    write_file(dir.path() / "b.jpg", photo);
+
+    ScanConfig config = test_config(dir.path());
+    config.detect_similar = false;
+    config.cache.enabled = false;
+
+    Scanner scanner(config);
+    const std::vector<std::filesystem::path> roots = {dir.path()};
+    auto report = scanner.scan(roots);
+    REQUIRE(report.has_value());
+
+    REQUIRE(report->clusters.size() == 1);
+    CHECK(report->clusters[0].members.size() == 2);
+
+    CHECK(report->stats.bytes_read <= 4 * kPartialHashChunk);
+}
+
+TEST_CASE("reclaimable bytes count each file once", "[scan]") {
+    TempDir dir;
+
+    const Image original = make_image(900, 700, 63);
+    const auto identical = encode_jpeg(original, 95);
+
+    write_file(dir.path() / "a.jpg", identical);
+    write_file(dir.path() / "b.jpg", identical);
+    write_file(dir.path() / "c.jpg", encode_jpeg(original, 50));
+
+    ScanConfig config = test_config(dir.path());
+    config.cache.enabled = false;
+
+    Scanner scanner(config);
+    const std::vector<std::filesystem::path> roots = {dir.path()};
+    auto report = scanner.scan(roots);
+    REQUIRE(report.has_value());
+    REQUIRE(report->clusters.size() >= 1);
+
+    std::uint64_t total_size = 0;
+    for (const FileEntry& file : report->files) {
+        total_size += file.size;
+    }
+
+    CHECK(report->total_reclaimable_bytes() < total_size);
+
+    std::uint64_t summed = 0;
+    for (const Cluster& cluster : report->clusters) {
+        summed += cluster.reclaimable_bytes;
+    }
+    CHECK(report->total_reclaimable_bytes() <= summed);
+}
+
+TEST_CASE("the cache does not trust what it reads back", "[cache]") {
+    TempDir dir;
+
+    SECTION("an out-of-range frame count is clamped on load") {
+        CacheEntry entry;
+        entry.key.path = "video.mp4";
+        entry.key.size = 1234;
+        entry.key.mtime_ns = 5678;
+        entry.media = MediaKind::Video;
+        entry.signature.has_video = true;
+        entry.signature.video.frame_count = 9999;
+
+        {
+            SignatureCache cache;
+            REQUIRE(cache.open(dir.path() / "cache.db").has_value());
+            cache.store(entry);
+            REQUIRE(cache.flush(0).has_value());
+        }
+
+        SignatureCache reopened;
+        REQUIRE(reopened.open(dir.path() / "cache.db").has_value());
+        REQUIRE(reopened.load().has_value());
+
+        MediaKind media = MediaKind::Unknown;
+        Signature signature;
+        REQUIRE(reopened.lookup(entry.key, media, signature));
+        CHECK(signature.video.frame_count <= kMaxVideoFrames);
+    }
+}
+
+TEST_CASE("the cache commits in batches rather than at the end", "[cache]") {
+    TempDir dir;
+
+    SignatureCache cache;
+    REQUIRE(cache.open(dir.path() / "cache.db").has_value());
+
+    for (std::size_t i = 0; i < 5000; ++i) {
+        CacheEntry entry;
+        entry.key.path = "file" + std::to_string(i) + ".jpg";
+        entry.key.size = i;
+        entry.media = MediaKind::Image;
+        entry.signature.has_partial_hash = true;
+        cache.store(std::move(entry));
+    }
+
+    CHECK(cache.pending_rows() < 5000);
+
+    REQUIRE(cache.flush(0).has_value());
+    CHECK(cache.pending_rows() == 0);
+
+    SignatureCache reopened;
+    REQUIRE(reopened.open(dir.path() / "cache.db").has_value());
+    REQUIRE(reopened.load().has_value());
+    CHECK(reopened.loaded_rows() == 5000);
 }
 
 TEST_CASE("content hashing primitives", "[hash]") {
@@ -230,8 +402,6 @@ TEST_CASE("content hashing primitives", "[hash]") {
     CHECK(hash_a.value() == hash_b.value());
 
     SECTION("a single changed byte in the middle changes the full hash") {
-        // Deliberately outside the head and tail windows, so only the full hash
-        // can see it.
         payload[150 * 1024] ^= 0xFF;
         write_file(b, payload);
 
@@ -247,8 +417,6 @@ TEST_CASE("content hashing primitives", "[hash]") {
     }
 
     SECTION("size is folded into the partial hash") {
-        // Two files sharing a prefix but of different lengths must not collide on
-        // the cheap probe.
         std::vector<std::uint8_t> shorter(payload.begin(), payload.end() - 1024);
         const auto c = dir.path() / "c.bin";
         write_file(c, shorter);
@@ -312,7 +480,7 @@ TEST_CASE("cancellation stops the scan", "[scan]") {
     config.cache.enabled = false;
 
     std::stop_source stop;
-    stop.request_stop(); // already cancelled before the scan begins
+    stop.request_stop();
 
     Scanner scanner(config);
     const std::vector<std::filesystem::path> roots = {dir.path()};

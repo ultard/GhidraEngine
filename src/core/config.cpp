@@ -57,4 +57,4 @@ Result<void> ScanConfig::validate() const {
     return {};
 }
 
-} // namespace ghidraengine
+}

@@ -11,7 +11,6 @@ UnionFind::UnionFind(std::size_t count) : parent_(count), rank_(count, 0) {
 }
 
 std::uint32_t UnionFind::find(std::uint32_t item) {
-    // Path halving: same asymptotics as full compression without the second pass.
     while (parent_[item] != item) {
         parent_[item] = parent_[parent_[item]];
         item = parent_[item];
@@ -41,8 +40,6 @@ std::vector<std::vector<std::uint32_t>> group_transitive(std::size_t item_count,
         sets.unite(pair.a, pair.b);
     }
 
-    // Membership is derived from the pair list rather than by scanning every item,
-    // so an isolated file never allocates a group.
     std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> groups;
     std::vector<bool> touched(item_count, false);
     for (const MatchPair& pair : pairs) {
@@ -63,7 +60,6 @@ std::vector<std::vector<std::uint32_t>> group_transitive(std::size_t item_count,
         std::sort(members.begin(), members.end());
         result.push_back(std::move(members));
     }
-    // Deterministic output order regardless of hash-map iteration order.
     std::sort(result.begin(), result.end(),
               [](const auto& a, const auto& b) { return a.front() < b.front(); });
     return result;
@@ -71,7 +67,6 @@ std::vector<std::vector<std::uint32_t>> group_transitive(std::size_t item_count,
 
 std::vector<std::vector<std::uint32_t>> group_strict(std::size_t item_count,
                                                      std::span<const MatchPair> pairs) {
-    // Adjacency in CSR form: two counting passes, no per-node vector.
     std::vector<std::uint32_t> offsets(item_count + 1, 0);
     for (const MatchPair& pair : pairs) {
         ++offsets[pair.a + 1];
@@ -91,7 +86,6 @@ std::vector<std::vector<std::uint32_t>> group_strict(std::size_t item_count,
     std::vector<bool> assigned(item_count, false);
     std::vector<std::vector<std::uint32_t>> result;
 
-    // Seeds are visited in index order, which makes the output stable across runs.
     for (std::uint32_t seed = 0; seed < item_count; ++seed) {
         if (assigned[seed] || offsets[seed] == offsets[seed + 1]) {
             continue;
@@ -100,8 +94,6 @@ std::vector<std::vector<std::uint32_t>> group_strict(std::size_t item_count,
         std::vector<std::uint32_t> members{seed};
         assigned[seed] = true;
 
-        // Only direct neighbours of the seed are admitted. This is what prevents
-        // chaining: membership is always measured against one fixed reference.
         for (std::uint32_t slot = offsets[seed]; slot < offsets[seed + 1]; ++slot) {
             const std::uint32_t neighbour = neighbours[slot];
             if (!assigned[neighbour]) {
@@ -158,8 +150,6 @@ std::uint32_t choose_keeper(std::span<const std::uint32_t> members,
                 break;
         }
 
-        // Shared tie-breakers, applied in a fixed order so the choice never
-        // depends on enumeration order.
         if (a.size != b.size) {
             return a.size > b.size;
         }
@@ -178,4 +168,4 @@ std::uint32_t choose_keeper(std::span<const std::uint32_t> members,
     return keeper;
 }
 
-} // namespace ghidraengine
+}

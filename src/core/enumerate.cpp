@@ -17,11 +17,9 @@ namespace {
 
 using Bytes = std::span<const std::uint8_t>;
 
-// Character arrays, not string_view: a view of "\x00\x00\x01\xBA" stops at the
-// first NUL and would match every file. Array length keeps embedded NULs intact.
 template <std::size_t N>
 bool starts_with(Bytes data, const char (&magic)[N]) noexcept {
-    constexpr std::size_t length = N - 1; // drop the implicit terminator
+    constexpr std::size_t length = N - 1;
     return data.size() >= length && std::memcmp(data.data(), magic, length) == 0;
 }
 
@@ -32,8 +30,6 @@ bool bytes_at(Bytes data, std::size_t offset, const char (&magic)[N]) noexcept {
            std::memcmp(data.data() + offset, magic, length) == 0;
 }
 
-// MP4, MOV, HEIC and AVIF share one container; only the `ftyp` brand says whether
-// the payload is a movie or a still image.
 MediaKind classify_iso_bmff(Bytes data) noexcept {
     if (!bytes_at(data, 4, "ftyp")) {
         return MediaKind::Unknown;
@@ -53,11 +49,10 @@ MediaKind classify_iso_bmff(Bytes data) noexcept {
         }
     }
 
-    return MediaKind::Video; // isom, mp41, mp42, qt, 3gp*, M4V, dash, ...
+    return MediaKind::Video;
 }
 
 bool is_mpeg_transport_stream(Bytes data) noexcept {
-    // One 0x47 is too weak a signal; require it to repeat on the 188-byte grid.
     if (data.size() < 189 || data[0] != 0x47) {
         return false;
     }
@@ -67,7 +62,7 @@ bool is_mpeg_transport_stream(Bytes data) noexcept {
     return data[188] == 0x47;
 }
 
-} // namespace
+}
 
 MediaKind classify_header(Bytes data) noexcept {
     if (data.size() < 4) {
@@ -75,7 +70,7 @@ MediaKind classify_header(Bytes data) noexcept {
     }
 
     if (starts_with(data, "\xFF\xD8\xFF")) {
-        return MediaKind::Image; // JPEG
+        return MediaKind::Image;
     }
     if (starts_with(data, "\x89PNG\r\n\x1A\n")) {
         return MediaKind::Image;
@@ -84,25 +79,24 @@ MediaKind classify_header(Bytes data) noexcept {
         return MediaKind::Image;
     }
     if (starts_with(data, "BM")) {
-        return MediaKind::Image; // BMP
+        return MediaKind::Image;
     }
     if (starts_with(data, "8BPS")) {
-        return MediaKind::Image; // Photoshop
+        return MediaKind::Image;
     }
     if (starts_with(data, "qoif")) {
         return MediaKind::Image;
     }
     if (starts_with(data, "\xFF\x0A") ||
         starts_with(data, "\x00\x00\x00\x0CJXL \r\n\x87\n")) {
-        return MediaKind::Image; // JPEG XL, raw and container form
+        return MediaKind::Image;
     }
     if (starts_with(data, "FUJIFILMCCD-RAW")) {
         return MediaKind::Image;
     }
     if (starts_with(data, "FOVb")) {
-        return MediaKind::Image; // Sigma X3F
+        return MediaKind::Image;
     }
-    // TIFF and every raw format built on it: CR2, NEF, ARW, DNG, ORF, PEF, RW2.
     if (starts_with(data, "II\x2A\x00") || starts_with(data, "MM\x00\x2A") ||
         starts_with(data, "II\x2B\x00") || starts_with(data, "MM\x00\x2B") ||
         starts_with(data, "IIRO") || starts_with(data, "IIU\x00")) {
@@ -116,7 +110,7 @@ MediaKind classify_header(Bytes data) noexcept {
         if (bytes_at(data, 8, "AVI ")) {
             return MediaKind::Video;
         }
-        return MediaKind::Unknown; // WAV and other RIFF payloads
+        return MediaKind::Unknown;
     }
 
     if (const MediaKind kind = classify_iso_bmff(data); kind != MediaKind::Unknown) {
@@ -124,22 +118,22 @@ MediaKind classify_header(Bytes data) noexcept {
     }
 
     if (starts_with(data, "\x1A\x45\xDF\xA3")) {
-        return MediaKind::Video; // Matroska / WebM (EBML)
+        return MediaKind::Video;
     }
     if (starts_with(data, "FLV\x01")) {
         return MediaKind::Video;
     }
     if (starts_with(data, "\x30\x26\xB2\x75\x8E\x66\xCF\x11")) {
-        return MediaKind::Video; // ASF / WMV
+        return MediaKind::Video;
     }
     if (starts_with(data, "OggS")) {
-        return MediaKind::Video; // may be audio-only; the decoder rejects those
+        return MediaKind::Video;
     }
     if (starts_with(data, "\x00\x00\x01\xBA") || starts_with(data, "\x00\x00\x01\xB3")) {
-        return MediaKind::Video; // MPEG program stream / elementary stream
+        return MediaKind::Video;
     }
     if (starts_with(data, "#!AMR")) {
-        return MediaKind::Unknown; // audio
+        return MediaKind::Unknown;
     }
     if (is_mpeg_transport_stream(data)) {
         return MediaKind::Video;
@@ -159,14 +153,11 @@ bool extension_is_candidate(const std::filesystem::path& path) noexcept {
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
     static const std::unordered_set<std::string_view> kExtensions = {
-        // Images
         ".jpg", ".jpeg", ".jpe", ".jfif", ".png", ".gif", ".bmp", ".dib", ".webp",
         ".tif", ".tiff", ".heic", ".heif", ".hif", ".avif", ".jxl", ".psd", ".qoi",
         ".ico", ".tga", ".pbm", ".pgm", ".ppm", ".pnm", ".jp2", ".j2k", ".jpf",
-        // Camera raw
         ".cr2", ".cr3", ".nef", ".nrw", ".arw", ".srf", ".sr2", ".dng", ".orf",
         ".pef", ".raf", ".rw2", ".raw", ".x3f", ".3fr", ".erf", ".mrw", ".kdc",
-        // Video
         ".mp4", ".m4v", ".mov", ".qt", ".mkv", ".webm", ".avi", ".wmv", ".asf",
         ".flv", ".f4v", ".mpg", ".mpeg", ".m2v", ".mts", ".m2ts", ".ts", ".vob",
         ".3gp", ".3g2", ".ogv", ".mxf", ".rm", ".rmvb", ".divx", ".m4s",
@@ -180,8 +171,8 @@ EnumerateResult enumerate_files(std::span<const std::filesystem::path> roots,
                                 const std::stop_token& token) {
     EnumerateResult result;
 
-    std::unordered_set<FileIdentity, FileIdentityHash> visited_dirs; // breaks symlink loops
-    std::unordered_set<FileIdentity, FileIdentityHash> seen_files;   // collapses hard links
+    std::unordered_set<FileIdentity, FileIdentityHash> visited_dirs;
+    std::unordered_set<FileIdentity, FileIdentityHash> seen_files;
 
     struct Frame {
         std::filesystem::path path;
@@ -216,7 +207,6 @@ EnumerateResult enumerate_files(std::span<const std::filesystem::path> roots,
             continue;
         }
         if (!std::filesystem::is_directory(root, ec)) {
-            // A single file as a root is a one-entry tree.
             platform::DirEntry entry;
             entry.path = root;
             if (auto stat = platform::stat_entry(root, entry); !stat) {
@@ -271,7 +261,6 @@ EnumerateResult enumerate_files(std::span<const std::filesystem::path> roots,
                 if (config.max_depth != 0 && frame.depth + 1 >= config.max_depth) {
                     continue;
                 }
-                // Only symlinks can create cycles, so only they pay for the open.
                 if (entry.is_symlink) {
                     auto identity = platform::identity_of(entry.path);
                     if (!identity) {
@@ -279,7 +268,7 @@ EnumerateResult enumerate_files(std::span<const std::filesystem::path> roots,
                         continue;
                     }
                     if (!visited_dirs.insert(identity.value()).second) {
-                        continue; // already walked through another path
+                        continue;
                     }
                 }
                 stack.push_back(Frame{std::move(entry.path), frame.depth + 1});
@@ -307,8 +296,6 @@ EnumerateResult enumerate_files(std::span<const std::filesystem::path> roots,
             file.path = std::move(entry.path);
             file.size = entry.size;
             file.mtime_ns = entry.mtime_ns;
-            // Media kind stays Unknown: it is decided from the header during the
-            // first read, which the pipeline performs anyway.
             result.files.push_back(std::move(file));
         }
 
@@ -317,8 +304,6 @@ EnumerateResult enumerate_files(std::span<const std::filesystem::path> roots,
         }
     }
 
-    // Hard-link collapse, deferred so the walk never pays an open() per file:
-    // identity is resolved only for files sharing a size with another file.
     if (!result.files.empty()) {
         std::unordered_set<std::uint64_t> sizes;
         std::unordered_set<std::uint64_t> repeated;
@@ -348,4 +333,4 @@ EnumerateResult enumerate_files(std::span<const std::filesystem::path> roots,
     return result;
 }
 
-} // namespace ghidraengine
+}

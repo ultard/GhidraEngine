@@ -1,6 +1,3 @@
-// The two stages that dominate a scan: the JPEG decode fast path, which caps
-// photo throughput, and MIH query latency, which decides whether the library
-// scales past a few tens of thousands of files.
 #include <random>
 #include <vector>
 
@@ -31,7 +28,7 @@ const std::vector<std::uint8_t>& jpeg_sample(std::uint32_t width, std::uint32_t 
     return cached;
 }
 
-} // namespace
+}
 
 static void BM_Dct16Scalar(benchmark::State& state) {
     alignas(64) float input[kDctInputCount];
@@ -65,7 +62,6 @@ static void BM_Dct16Dispatched(benchmark::State& state) {
 }
 BENCHMARK(BM_Dct16Dispatched);
 
-// How fast one photo becomes a comparable signature.
 static void BM_DecodeJpeg(benchmark::State& state) {
     const auto width = static_cast<std::uint32_t>(state.range(0));
     const auto height = static_cast<std::uint32_t>(state.range(1));
@@ -84,8 +80,6 @@ BENCHMARK(BM_DecodeJpeg)
     ->Args({4000, 3000})
     ->Args({6000, 4000});
 
-// The same file at full resolution, the way an ordinary image loader would do it.
-// Both produce a hashable buffer; only one wastes 63/64ths of the work.
 static void BM_DecodeJpegFullResolution(benchmark::State& state) {
     const auto width = static_cast<std::uint32_t>(state.range(0));
     const auto height = static_cast<std::uint32_t>(state.range(1));
@@ -99,7 +93,7 @@ static void BM_DecodeJpegFullResolution(benchmark::State& state) {
         jpeg_mem_src(&info, data.data(), static_cast<unsigned long>(data.size()));
         jpeg_read_header(&info, TRUE);
 
-        info.out_color_space = JCS_YCbCr; // same output space as the fast path
+        info.out_color_space = JCS_YCbCr;
         info.do_fancy_upsampling = FALSE;
         info.do_block_smoothing = FALSE;
         info.dct_method = JDCT_ISLOW;
@@ -174,7 +168,6 @@ static void BM_MihBuild(benchmark::State& state) {
 }
 BENCHMARK(BM_MihBuild)->Arg(10000)->Arg(100000)->Arg(1000000);
 
-// The same query against a linear scan is below.
 static void BM_MihQuery(benchmark::State& state) {
     const auto count = static_cast<std::size_t>(state.range(0));
     std::mt19937_64 rng(7);

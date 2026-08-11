@@ -1,5 +1,3 @@
-// NEON kernel for AArch64, where the ISA is part of the baseline so no runtime
-// probe is required.
 #include "hash/dct.hpp"
 
 #if defined(GHIDRAENGINE_NEON_SIMD)
@@ -74,6 +72,6 @@ void dct16_neon(const float* input, float* output) noexcept {
     }
 }
 
-} // namespace ghidraengine
+}
 
-#endif // GHIDRAENGINE_NEON_SIMD
+#endif

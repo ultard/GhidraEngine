@@ -1,5 +1,3 @@
-// No exception escapes a scan: per-file problems land in Report::errors, while
-// operations that can fail as a whole return Result<T>.
 #pragma once
 
 #include <string>
@@ -11,15 +9,15 @@ namespace ghidraengine {
 
 enum class ErrorCode {
     Ok = 0,
-    NotFound,          // path does not exist
-    AccessDenied,      // permissions, locked file, sharing violation
-    IoError,           // read failed mid-stream
-    UnsupportedFormat, // magic bytes matched nothing we can decode
-    DecodeFailed,      // decoder rejected the payload
-    CorruptFile,       // truncated or structurally invalid
-    Cancelled,         // stop_token was signalled
-    CacheError,        // persistent cache could not be opened or written
-    InvalidArgument,   // caller passed a nonsensical config
+    NotFound,
+    AccessDenied,
+    IoError,
+    UnsupportedFormat,
+    DecodeFailed,
+    CorruptFile,
+    Cancelled,
+    CacheError,
+    InvalidArgument,
     OutOfMemory,
     Unknown,
 };
@@ -35,7 +33,6 @@ struct Error {
     explicit Error(ErrorCode c) : code(c), message(to_string(c)) {}
 };
 
-// Not std::expected: C++20 toolchains predate <expected>.
 template <typename T>
 class Result {
 public:
@@ -81,4 +78,4 @@ private:
     bool failed_ = false;
 };
 
-} // namespace ghidraengine
+}

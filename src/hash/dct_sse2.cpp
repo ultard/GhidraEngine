@@ -1,5 +1,3 @@
-// Fallback for pre-Haswell x86, where SSE2 is guaranteed by the x86-64 baseline.
-// Same loop structure as the AVX2 path at half the width and without FMA.
 #include "hash/dct.hpp"
 
 #if defined(GHIDRAENGINE_X86_SIMD)
@@ -74,6 +72,6 @@ void dct16_sse2(const float* input, float* output) noexcept {
     }
 }
 
-} // namespace ghidraengine
+}
 
-#endif // GHIDRAENGINE_X86_SIMD
+#endif

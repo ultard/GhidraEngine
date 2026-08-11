@@ -1,9 +1,10 @@
-// Unit tests for the self-contained pieces: glob matching, format sniffing, the
-// SIMD kernels, the MIH index and clustering.
 #include <algorithm>
+#include <atomic>
 #include <numeric>
 #include <random>
 #include <set>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -12,6 +13,7 @@
 #include "ghidraengine/ghidraengine.hpp"
 #include "core/enumerate.hpp"
 #include "core/glob.hpp"
+#include "core/thread_pool.hpp"
 #include "hash/dct.hpp"
 #include "index/cluster.hpp"
 #include "index/mih_index.hpp"
@@ -72,7 +74,6 @@ TEST_CASE("format identification from magic bytes", "[magic]") {
     }
 
     SECTION("ISO base media brand separates HEIC from MP4") {
-        // Same container; only the brand separates a photo from a movie.
         std::vector<std::uint8_t> heic = {0, 0, 0, 0x18, 'f', 't', 'y', 'p',
                                           'h', 'e', 'i', 'c', 0, 0, 0, 0};
         std::vector<std::uint8_t> avif = {0, 0, 0, 0x18, 'f', 't', 'y', 'p',
@@ -122,8 +123,6 @@ TEST_CASE("SIMD DCT kernels agree with the scalar reference", "[dct][simd]") {
     INFO("active backend: " << active_simd_backend());
     REQUIRE(kernels.size() >= 1);
 
-    // Reproduces the real thresholding, so the test asserts the property that
-    // matters rather than coefficient closeness.
     const auto hash_of = [](const float* coefficients) {
         std::vector<float> ac;
         for (std::size_t v = 0; v < 8; ++v) {
@@ -161,30 +160,23 @@ TEST_CASE("SIMD DCT kernels agree with the scalar reference", "[dct][simd]") {
             kernel(input, actual);
 
             for (std::size_t i = 0; i < kDctOutputCount; ++i) {
-                // FMA and reassociation rule out bit equality; the difference just
-                // has to stay far below the spacing thresholding can resolve.
                 const float scale = std::max(1.0F, std::abs(reference[i]));
                 CHECK(std::abs(actual[i] - reference[i]) / scale < 1e-3F);
             }
 
-            // Every kernel must yield the same hash, or an AVX2 machine would
-            // disagree with one without it and poison the shared cache.
             CHECK(hash_of(actual) == hash_of(reference));
         }
     }
 }
 
 TEST_CASE("MIH returns exactly the same set as brute force", "[mih]") {
-    // The index is an optimisation, not an approximation: divergence here means
-    // recall has silently dropped.
     std::mt19937_64 rng(987654321);
 
-    for (const std::uint32_t threshold : {0U, 3U, 8U, 10U, 12U}) {
+    for (const std::uint32_t threshold : {0U, 3U, 8U, 10U, 12U, 16U, 20U, 24U}) {
         std::vector<std::uint64_t> codes(4000);
         for (std::uint64_t& code : codes) {
             code = rng();
         }
-        // Near-duplicates, so the test is not measuring an empty result set.
         for (std::size_t i = 0; i < 200; ++i) {
             std::uint64_t base = codes[i];
             const int flips = static_cast<int>(rng() % (threshold + 1));
@@ -229,8 +221,6 @@ TEST_CASE("union-find and clustering", "[cluster]") {
     }
 
     SECTION("strict grouping refuses to chain") {
-        // 0~1 and 1~2, but 0 and 2 were never found similar to each other.
-        // Transitive mode merges all three; strict mode must not.
         const std::vector<MatchPair> pairs = {{0, 1, 9}, {1, 2, 9}};
 
         const auto transitive = group_transitive(4, pairs);
@@ -250,13 +240,43 @@ TEST_CASE("union-find and clustering", "[cluster]") {
 
         const std::vector<std::uint32_t> members = {0, 1, 2};
 
-        // Equal pixel counts fall through to the larger file.
         CHECK(choose_keeper(members, info, KeeperPolicy::HighestResolution) == 2);
         CHECK(choose_keeper(members, info, KeeperPolicy::LargestFile) == 2);
         CHECK(choose_keeper(members, info, KeeperPolicy::OldestModified) == 0);
         CHECK(choose_keeper(members, info, KeeperPolicy::NewestModified) == 1);
         CHECK(choose_keeper(members, info, KeeperPolicy::ShortestPath) == 1);
     }
+}
+
+TEST_CASE("parallel_for survives a throwing body", "[pool]") {
+    ThreadPool pool(4);
+
+    SECTION("the exception reaches the caller") {
+        std::atomic<int> ran{0};
+        CHECK_THROWS_AS(parallel_for(pool, 0, 1000,
+                                     [&](std::size_t index) {
+                                         ran.fetch_add(1, std::memory_order_relaxed);
+                                         if (index == 500) {
+                                             throw std::runtime_error("boom");
+                                         }
+                                     }),
+                        std::runtime_error);
+        CHECK(ran.load() > 0);
+    }
+
+    SECTION("the pool is still usable afterwards") {
+        std::atomic<int> total{0};
+        parallel_for(pool, 0, 100,
+                     [&](std::size_t) { total.fetch_add(1, std::memory_order_relaxed); });
+        CHECK(total.load() == 100);
+    }
+}
+
+TEST_CASE("the version string matches the version constants", "[version]") {
+    const std::string expected = std::to_string(Version::major) + "." +
+                                 std::to_string(Version::minor) + "." +
+                                 std::to_string(Version::patch);
+    CHECK(std::string(version_string()) == expected);
 }
 
 TEST_CASE("hamming distance", "[hash]") {

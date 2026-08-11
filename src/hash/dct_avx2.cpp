@@ -1,5 +1,3 @@
-// Own translation unit with -mavx2 / arch:AVX2; reached only after cpuid confirms
-// the ISA and the OS has enabled ymm state.
 #include "hash/dct.hpp"
 
 #if defined(GHIDRAENGINE_X86_SIMD)
@@ -13,8 +11,6 @@ void dct16_avx2(const float* input, float* output) noexcept {
 
     alignas(32) float intermediate[kDctOutputSize * kDctInputSize];
 
-    // Four ymm accumulators held across the whole reduction over y, so the
-    // intermediate row is written once, not 32 times.
     for (std::size_t u = 0; u < kDctOutputSize; ++u) {
         const float* basis = tables.row_basis + u * kDctInputSize;
 
@@ -39,8 +35,6 @@ void dct16_avx2(const float* input, float* output) noexcept {
         _mm256_store_ps(row + 24, acc3);
     }
 
-    // Accumulating along x keeps the 16 outputs in two ymm registers and avoids
-    // the 256 horizontal reductions a dot-product formulation would cost.
     for (std::size_t v = 0; v < kDctOutputSize; ++v) {
         const float* row = intermediate + v * kDctInputSize;
 
@@ -59,9 +53,9 @@ void dct16_avx2(const float* input, float* output) noexcept {
         _mm256_storeu_ps(out + 8, acc1);
     }
 
-    _mm256_zeroupper(); // avoid the AVX-SSE transition penalty on the way out
+    _mm256_zeroupper();
 }
 
-} // namespace ghidraengine
+}
 
-#endif // GHIDRAENGINE_X86_SIMD
+#endif

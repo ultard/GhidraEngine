@@ -2,13 +2,6 @@
 
 namespace ghidraengine {
 
-// Reference the SIMD kernels must match closely enough to produce an identical
-// thresholded hash; the tests enforce that.
-//
-// Pass 1: intermediate[u][x] = sum_y row_basis[u][y] * input[y][x]   (16 x 32)
-// Pass 2: output[v][u]       = sum_x intermediate[v][x] * col_basis[x][u]
-//
-// Both accumulate along the contiguous axis, so no transpose is needed.
 void dct16_scalar(const float* input, float* output) noexcept {
     const DctTables& tables = dct_tables();
 
@@ -47,4 +40,4 @@ void dct16_scalar(const float* input, float* output) noexcept {
     }
 }
 
-} // namespace ghidraengine
+}

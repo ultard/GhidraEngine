@@ -7,12 +7,11 @@
 #include <sqlite3.h>
 
 #include "core/platform.hpp"
+#include "hash/content_hash.hpp"
 
 namespace ghidraengine {
 namespace {
 
-// Signatures are one opaque blob: fixed-size and only read back by this library,
-// so a column per field would only cost a migration whenever a hash is added.
 struct StoredSignature {
     std::uint64_t partial_low;
     std::uint64_t partial_high;
@@ -29,7 +28,7 @@ struct StoredSignature {
     std::uint32_t video_height;
     std::uint32_t video_frame_count;
     std::uint64_t video_frames[kMaxVideoFrames];
-    std::uint8_t flags; // bit 0 partial, 1 full, 2 image, 3 video, 4 image colour
+    std::uint8_t flags;
 };
 
 constexpr std::uint8_t kFlagPartial = 1U << 0;
@@ -82,11 +81,11 @@ Signature unpack(const StoredSignature& stored) {
     signature.video.duration_ms = stored.video_duration_ms;
     signature.video.width = stored.video_width;
     signature.video.height = stored.video_height;
-    signature.video.frame_count = stored.video_frame_count;
+    signature.video.frame_count =
+        std::min<std::uint32_t>(stored.video_frame_count, kMaxVideoFrames);
     std::memcpy(signature.video.frames.data(), stored.video_frames, sizeof(stored.video_frames));
 
-    // Derived, not stored: a 16-element sort saves a third of the row size.
-    const std::size_t count = std::min<std::size_t>(stored.video_frame_count, kMaxVideoFrames);
+    const std::size_t count = signature.video.frame_count;
     std::copy_n(signature.video.frames.begin(), count, signature.video.sorted.begin());
     std::sort(signature.video.sorted.begin(),
               signature.video.sorted.begin() + static_cast<std::ptrdiff_t>(count));
@@ -109,7 +108,6 @@ Error sqlite_error(sqlite3* db, std::string_view context) {
     return Error{ErrorCode::CacheError, std::string(context) + ": " + message};
 }
 
-// sqlite3_stmt has no RAII of its own, and every early return below would leak it.
 class Statement {
 public:
     Statement() = default;
@@ -131,7 +129,38 @@ private:
     sqlite3_stmt* handle_ = nullptr;
 };
 
-} // namespace
+}
+
+std::uint64_t signature_config_hash(const ScanConfig& config) noexcept {
+    struct Fields {
+        std::uint8_t detect_exact;
+        std::uint8_t detect_similar;
+        std::uint8_t dihedral_invariant;
+        std::uint8_t padding0;
+        std::uint32_t min_dimension;
+        std::uint32_t frame_samples;
+        std::uint32_t padding1;
+        double edge_skip_fraction;
+        double min_frame_variance;
+    };
+    static_assert(sizeof(Fields) == 32, "Fields must have no implicit padding");
+
+    const Fields fields{
+        static_cast<std::uint8_t>(config.detect_exact ? 1 : 0),
+        static_cast<std::uint8_t>(config.detect_similar ? 1 : 0),
+        static_cast<std::uint8_t>(config.image.dihedral_invariant ? 1 : 0),
+        0,
+        config.image.min_dimension,
+        config.video.frame_samples,
+        0,
+        config.video.edge_skip_fraction,
+        config.video.min_frame_variance,
+    };
+
+    return hash_bytes(std::span<const std::uint8_t>(
+                          reinterpret_cast<const std::uint8_t*>(&fields), sizeof(fields)))
+        .low;
+}
 
 SignatureCache::~SignatureCache() {
     if (db_ != nullptr) {
@@ -152,41 +181,36 @@ Result<void> SignatureCache::open(const std::filesystem::path& path) {
         return error;
     }
 
-    // WAL removes the per-commit fsync that would make batching pointless, and
-    // NORMAL is right for a cache: a torn write costs a rescan, not data.
     const char* pragmas =
         "PRAGMA journal_mode=WAL;"
         "PRAGMA synchronous=NORMAL;"
         "PRAGMA temp_store=MEMORY;"
-        "PRAGMA cache_size=-16384;"; // 16 MiB page cache
+        "PRAGMA cache_size=-16384;";
     sqlite3_exec(db_, pragmas, nullptr, nullptr, nullptr);
 
     return apply_schema();
 }
 
 Result<void> SignatureCache::apply_schema() {
-    const char* schema =
-        "CREATE TABLE IF NOT EXISTS meta ("
-        "  key TEXT PRIMARY KEY,"
-        "  value INTEGER NOT NULL);"
-        "CREATE TABLE IF NOT EXISTS signatures ("
-        "  path TEXT PRIMARY KEY,"
-        "  size INTEGER NOT NULL,"
-        "  mtime_ns INTEGER NOT NULL,"
-        "  media INTEGER NOT NULL,"
-        "  seen_at INTEGER NOT NULL,"
-        "  payload BLOB NOT NULL) WITHOUT ROWID;";
+    const auto exec = [&](const char* sql, std::string_view what) -> Result<void> {
+        char* message = nullptr;
+        if (sqlite3_exec(db_, sql, nullptr, nullptr, &message) != SQLITE_OK) {
+            Error error{ErrorCode::CacheError,
+                        std::string(what) + ": " + (message != nullptr ? message : "")};
+            sqlite3_free(message);
+            return error;
+        }
+        return {};
+    };
 
-    char* message = nullptr;
-    if (sqlite3_exec(db_, schema, nullptr, nullptr, &message) != SQLITE_OK) {
-        Error error{ErrorCode::CacheError,
-                    std::string("create schema: ") + (message != nullptr ? message : "")};
-        sqlite3_free(message);
-        return error;
+    if (auto created = exec("CREATE TABLE IF NOT EXISTS meta ("
+                            "  key TEXT PRIMARY KEY,"
+                            "  value INTEGER NOT NULL);",
+                            "create meta table");
+        !created) {
+        return created;
     }
 
-    // A version mismatch means the stored hashes came from different code, so the
-    // table is dropped rather than compared across that boundary.
     int stored_version = 0;
     {
         Statement select;
@@ -200,8 +224,23 @@ Result<void> SignatureCache::apply_schema() {
     }
 
     if (stored_version != kCacheSchemaVersion) {
-        sqlite3_exec(db_, "DELETE FROM signatures;", nullptr, nullptr, nullptr);
+        sqlite3_exec(db_, "DROP TABLE IF EXISTS signatures;", nullptr, nullptr, nullptr);
+    }
 
+    if (auto created = exec("CREATE TABLE IF NOT EXISTS signatures ("
+                            "  path TEXT PRIMARY KEY,"
+                            "  size INTEGER NOT NULL,"
+                            "  mtime_ns INTEGER NOT NULL,"
+                            "  config_hash INTEGER NOT NULL,"
+                            "  media INTEGER NOT NULL,"
+                            "  seen_at INTEGER NOT NULL,"
+                            "  payload BLOB NOT NULL) WITHOUT ROWID;",
+                            "create signatures table");
+        !created) {
+        return created;
+    }
+
+    if (stored_version != kCacheSchemaVersion) {
         Statement update;
         if (auto prepared = update.prepare(
                 db_, "INSERT INTO meta(key,value) VALUES('version',?1) "
@@ -225,7 +264,7 @@ Result<void> SignatureCache::load() {
 
     Statement select;
     if (auto prepared = select.prepare(
-            db_, "SELECT path,size,mtime_ns,media,payload FROM signatures;");
+            db_, "SELECT path,size,mtime_ns,config_hash,media,payload FROM signatures;");
         !prepared) {
         return prepared;
     }
@@ -241,12 +280,14 @@ Result<void> SignatureCache::load() {
                                         sqlite3_column_bytes(select.get(), 0)));
         entry.key.size = static_cast<std::uint64_t>(sqlite3_column_int64(select.get(), 1));
         entry.key.mtime_ns = sqlite3_column_int64(select.get(), 2);
-        entry.media = static_cast<MediaKind>(sqlite3_column_int(select.get(), 3));
+        entry.key.config_hash =
+            static_cast<std::uint64_t>(sqlite3_column_int64(select.get(), 3));
+        entry.media = static_cast<MediaKind>(sqlite3_column_int(select.get(), 4));
 
-        const void* blob = sqlite3_column_blob(select.get(), 4);
-        const int bytes = sqlite3_column_bytes(select.get(), 4);
+        const void* blob = sqlite3_column_blob(select.get(), 5);
+        const int bytes = sqlite3_column_bytes(select.get(), 5);
         if (blob == nullptr || bytes != static_cast<int>(sizeof(StoredSignature))) {
-            continue; // row written by a different build; treat as a miss
+            continue;
         }
 
         StoredSignature stored{};
@@ -266,8 +307,8 @@ bool SignatureCache::lookup(const CacheKey& key, MediaKind& media,
     if (it == entries_.end()) {
         return false;
     }
-    // Same path, but the file changed since it was hashed.
-    if (it->second.key.size != key.size || it->second.key.mtime_ns != key.mtime_ns) {
+    if (it->second.key.size != key.size || it->second.key.mtime_ns != key.mtime_ns ||
+        it->second.key.config_hash != key.config_hash) {
         return false;
     }
     media = it->second.media;
@@ -279,8 +320,18 @@ void SignatureCache::store(CacheEntry entry) {
     if (db_ == nullptr || entry.key.path.empty()) {
         return;
     }
-    const std::lock_guard lock(pending_mutex_);
-    pending_.push_back(std::move(entry));
+
+    std::vector<CacheEntry> batch;
+    {
+        const std::lock_guard lock(pending_mutex_);
+        pending_.push_back(std::move(entry));
+        if (pending_.size() < kBatchRows) {
+            return;
+        }
+        batch.swap(pending_);
+    }
+
+    (void)commit(std::move(batch), 0);
 }
 
 std::size_t SignatureCache::pending_rows() const {
@@ -292,10 +343,11 @@ Result<void> SignatureCache::write_batch(std::span<const CacheEntry> batch) {
     Statement insert;
     if (auto prepared = insert.prepare(
             db_,
-            "INSERT INTO signatures(path,size,mtime_ns,media,seen_at,payload)"
-            " VALUES(?1,?2,?3,?4,?5,?6)"
+            "INSERT INTO signatures(path,size,mtime_ns,config_hash,media,seen_at,payload)"
+            " VALUES(?1,?2,?3,?4,?5,?6,?7)"
             " ON CONFLICT(path) DO UPDATE SET"
-            "  size=excluded.size, mtime_ns=excluded.mtime_ns, media=excluded.media,"
+            "  size=excluded.size, mtime_ns=excluded.mtime_ns,"
+            "  config_hash=excluded.config_hash, media=excluded.media,"
             "  seen_at=excluded.seen_at, payload=excluded.payload;");
         !prepared) {
         return prepared;
@@ -310,9 +362,11 @@ Result<void> SignatureCache::write_batch(std::span<const CacheEntry> batch) {
                           static_cast<int>(entry.key.path.size()), SQLITE_STATIC);
         sqlite3_bind_int64(insert.get(), 2, static_cast<sqlite3_int64>(entry.key.size));
         sqlite3_bind_int64(insert.get(), 3, entry.key.mtime_ns);
-        sqlite3_bind_int(insert.get(), 4, static_cast<int>(entry.media));
-        sqlite3_bind_int64(insert.get(), 5, now);
-        sqlite3_bind_blob(insert.get(), 6, &stored, static_cast<int>(sizeof(stored)),
+        sqlite3_bind_int64(insert.get(), 4,
+                           static_cast<sqlite3_int64>(entry.key.config_hash));
+        sqlite3_bind_int(insert.get(), 5, static_cast<int>(entry.media));
+        sqlite3_bind_int64(insert.get(), 6, now);
+        sqlite3_bind_blob(insert.get(), 7, &stored, static_cast<int>(sizeof(stored)),
                           SQLITE_TRANSIENT);
 
         if (sqlite3_step(insert.get()) != SQLITE_DONE) {
@@ -335,12 +389,17 @@ Result<void> SignatureCache::flush(std::uint32_t prune_after_days) {
         batch.swap(pending_);
     }
 
+    return commit(std::move(batch), prune_after_days);
+}
+
+Result<void> SignatureCache::commit(std::vector<CacheEntry> batch,
+                                    std::uint32_t prune_after_days) {
     if (batch.empty() && prune_after_days == 0) {
         return {};
     }
 
-    // Without one transaction SQLite commits per statement, and a million inserts
-    // spend all their time in fsync.
+    const std::lock_guard write_lock(write_mutex_);
+
     if (sqlite3_exec(db_, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) != SQLITE_OK) {
         return sqlite_error(db_, "begin transaction");
     }
@@ -369,4 +428,4 @@ Result<void> SignatureCache::flush(std::uint32_t prune_after_days) {
     return {};
 }
 
-} // namespace ghidraengine
+}

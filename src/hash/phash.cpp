@@ -23,7 +23,7 @@ float ac_median(const float* coefficients, std::size_t block, std::size_t stride
     for (std::size_t v = 0; v < block; ++v) {
         for (std::size_t u = 0; u < block; ++u) {
             if (v == 0 && u == 0) {
-                continue; // DC
+                continue;
             }
             values[count++] = coefficients[v * stride + u];
         }
@@ -105,7 +105,6 @@ std::array<std::uint8_t, kColorMomentBytes> extract_color_moments(
     const std::array<std::uint8_t, kChromaSize * kChromaSize>& cr) {
     std::array<std::uint8_t, kColorMomentBytes> moments{};
 
-    // 8x8 chroma down to a 4x4 grid: each cell is the mean of a 2x2 block.
     const auto fill = [](const std::array<std::uint8_t, kChromaSize * kChromaSize>& plane,
                          std::uint8_t* out) {
         for (std::size_t row = 0; row < 4; ++row) {
@@ -131,14 +130,14 @@ void apply_dihedral(const std::uint8_t* source, std::size_t size, std::size_t va
             std::size_t sx = x;
             std::size_t sy = y;
             switch (variant) {
-                case 0: break;                                       // identity
-                case 1: sx = size - 1 - x; break;                    // mirror X
-                case 2: sy = size - 1 - y; break;                    // mirror Y
-                case 3: sx = size - 1 - x; sy = size - 1 - y; break; // 180
-                case 4: sx = y; sy = x; break;                       // transpose
-                case 5: sx = y; sy = size - 1 - x; break;            // rotate 90
-                case 6: sx = size - 1 - y; sy = x; break;            // rotate 270
-                default: sx = size - 1 - y; sy = size - 1 - x; break; // anti-transpose
+                case 0: break;
+                case 1: sx = size - 1 - x; break;
+                case 2: sy = size - 1 - y; break;
+                case 3: sx = size - 1 - x; sy = size - 1 - y; break;
+                case 4: sx = y; sy = x; break;
+                case 5: sx = y; sy = size - 1 - x; break;
+                case 6: sx = size - 1 - y; sy = x; break;
+                default: sx = size - 1 - y; sy = size - 1 - x; break;
             }
             destination[y * size + x] = source[sy * size + sx];
         }
@@ -146,8 +145,8 @@ void apply_dihedral(const std::uint8_t* source, std::size_t size, std::size_t va
 }
 
 std::size_t canonical_variant(const float* coefficients) {
-    const float gx = coefficients[1];                 // C(0,1), horizontal
-    const float gy = coefficients[kDctOutputSize];    // C(1,0), vertical
+    const float gx = coefficients[1];
+    const float gy = coefficients[kDctOutputSize];
     const bool transpose = std::abs(gx) < std::abs(gy);
     const float first = transpose ? gy : gx;
     const float second = transpose ? gx : gy;
@@ -160,7 +159,7 @@ void to_float(std::span<const std::uint8_t> source, float* destination) {
     }
 }
 
-} // namespace
+}
 
 std::uint64_t phash64_of_gray(std::span<const std::uint8_t> gray) noexcept {
     if (gray.size() < kThumbPixels) {
@@ -290,4 +289,4 @@ const char* active_simd_backend() noexcept {
     return backend_name(active_backend());
 }
 
-} // namespace ghidraengine
+}

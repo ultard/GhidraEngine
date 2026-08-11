@@ -1,8 +1,3 @@
-// JPEG fast path: libjpeg-turbo scales straight from the DCT coefficients, so a
-// 6000x4000 photo comes out 750x500 and the full-resolution bitmap never exists.
-// 2.7x-3.8x over a full decode (BM_DecodeJpeg vs BM_DecodeJpegFullResolution);
-// no more, because Huffman decoding is irreducible. Output is JCS_YCbCr, not RGB:
-// the hashes want luma and chroma, which skips the colour matrix entirely.
 #include <algorithm>
 #include <csetjmp>
 #include <cstdio>
@@ -16,8 +11,6 @@
 #include "decode/resample.hpp"
 
 #ifdef _MSC_VER
-// C4611: setjmp vs destructors — the hazard decode_jpeg_raw is built to avoid.
-// C4324: JpegError padded for jmp_buf alignment, which is the intended layout.
 #pragma warning(push)
 #pragma warning(disable : 4611 4324)
 #endif
@@ -31,32 +24,29 @@ struct JpegError {
     char message[JMSG_LENGTH_MAX];
 };
 
-// POD only: longjmp past a frame holding a non-trivial destructor is UB, and
-// libjpeg reports every fatal error by longjmp. The pixel buffer is freed
-// explicitly on both paths.
+// POD only: longjmp past a frame holding a non-trivial destructor is UB.
+// `pixels` is malloc'd and owned by the caller.
 struct JpegRaw {
-    unsigned char* pixels = nullptr; // malloc'd; owned by whoever holds this
-    unsigned width = 0;              // decoded (scaled) dimensions
+    unsigned char* pixels = nullptr;
+    unsigned width = 0;
     unsigned height = 0;
     unsigned channels = 0;
-    unsigned full_width = 0;         // dimensions of the original image
+    unsigned full_width = 0;
     unsigned full_height = 0;
     int has_color = 0;
     std::uint16_t orientation = 1;
     char message[JMSG_LENGTH_MAX] = {};
 };
 
-// error_exit must not return, and an exception must not cross libjpeg's C frames.
+// Must not return, and must not let an exception cross libjpeg's C frames.
 void on_fatal_error(j_common_ptr info) {
     auto* error = reinterpret_cast<JpegError*>(info->err);
     (*info->err->format_message)(info, error->message);
     std::longjmp(error->escape, 1);
 }
 
-// A truncated JPEG still yields a usable thumbnail, so warnings are ignored.
 void on_message(j_common_ptr, int) {}
 
-// Smallest scale_num/8 leaving at least kThumbSize pixels on the short axis.
 unsigned choose_scale(unsigned width, unsigned height) {
     const unsigned smallest = std::min(width, height);
     for (unsigned numerator = 1; numerator <= 8; ++numerator) {
@@ -64,13 +54,12 @@ unsigned choose_scale(unsigned width, unsigned height) {
             return numerator;
         }
     }
-    return 8; // image is tiny; decode at full size
+    return 8;
 }
 
-} // namespace
+}
 
 std::uint16_t parse_exif_orientation(std::span<const std::uint8_t> app1) {
-    // APP1 payload: "Exif\0\0" then a TIFF header, then IFD0.
     constexpr std::size_t kPrefix = 6;
     if (app1.size() < kPrefix + 8 || std::memcmp(app1.data(), "Exif\0\0", kPrefix) != 0) {
         return 1;
@@ -109,7 +98,7 @@ std::uint16_t parse_exif_orientation(std::span<const std::uint8_t> app1) {
     };
 
     if (read16(2) != 42) {
-        return 1; // not a TIFF header after all
+        return 1;
     }
 
     const std::uint32_t ifd_offset = read32(4);
@@ -123,7 +112,7 @@ std::uint16_t parse_exif_orientation(std::span<const std::uint8_t> app1) {
         if (entry + 12 > tiff_size) {
             break;
         }
-        if (read16(entry) == 0x0112) { // Orientation
+        if (read16(entry) == 0x0112) {
             const std::uint16_t value = read16(entry + 8);
             return (value >= 1 && value <= 8) ? value : 1;
         }
@@ -133,8 +122,6 @@ std::uint16_t parse_exif_orientation(std::span<const std::uint8_t> app1) {
 
 namespace {
 
-// Returns false and fills raw.message on failure; on success the caller owns
-// raw.pixels and must free() it.
 bool decode_jpeg_raw(const std::uint8_t* data, std::size_t size, JpegRaw& raw) {
     jpeg_decompress_struct info;
     JpegError error;
@@ -144,7 +131,7 @@ bool decode_jpeg_raw(const std::uint8_t* data, std::size_t size, JpegRaw& raw) {
     error.base.emit_message = &on_message;
     error.message[0] = '\0';
 
-    if (setjmp(error.escape) != 0) { // reached by longjmp from libjpeg
+    if (setjmp(error.escape) != 0) {
         std::memcpy(raw.message, error.message, sizeof(raw.message));
         if (raw.pixels != nullptr) {
             std::free(raw.pixels);
@@ -157,7 +144,6 @@ bool decode_jpeg_raw(const std::uint8_t* data, std::size_t size, JpegRaw& raw) {
     jpeg_create_decompress(&info);
     jpeg_mem_src(&info, data, static_cast<unsigned long>(size));
 
-    // Must be requested before read_header or the marker is discarded.
     jpeg_save_markers(&info, JPEG_APP0 + 1, 0xFFFF);
 
     if (jpeg_read_header(&info, TRUE) != JPEG_HEADER_OK) {
@@ -187,10 +173,9 @@ bool decode_jpeg_raw(const std::uint8_t* data, std::size_t size, JpegRaw& raw) {
     info.scale_num = choose_scale(raw.full_width, raw.full_height);
     info.scale_denom = 8;
     info.out_color_space = raw.has_color != 0 ? JCS_YCbCr : JCS_GRAYSCALE;
-    // Both buy quality that averaging down to 32x32 throws away.
     info.do_fancy_upsampling = FALSE;
     info.do_block_smoothing = FALSE;
-    info.dct_method = JDCT_ISLOW; // deterministic across builds; the cache needs that
+    info.dct_method = JDCT_ISLOW;
 
     jpeg_start_decompress(&info);
 
@@ -216,12 +201,11 @@ bool decode_jpeg_raw(const std::uint8_t* data, std::size_t size, JpegRaw& raw) {
     while (info.output_scanline < raw.height) {
         JSAMPROW row = raw.pixels + static_cast<std::size_t>(info.output_scanline) * stride;
         if (jpeg_read_scanlines(&info, &row, 1) != 1) {
-            break; // truncated file: keep whatever decoded successfully
+            break;
         }
     }
     const unsigned decoded_rows = info.output_scanline;
 
-    // finish_decompress on a truncated stream would longjmp away usable rows.
     if (decoded_rows == raw.height) {
         jpeg_finish_decompress(&info);
     } else {
@@ -240,7 +224,7 @@ bool decode_jpeg_raw(const std::uint8_t* data, std::size_t size, JpegRaw& raw) {
     return true;
 }
 
-} // namespace
+}
 
 Result<Thumbnail> decode_jpeg(std::span<const std::uint8_t> data) {
     if (data.size() < 4) {
@@ -274,7 +258,7 @@ Result<Thumbnail> decode_jpeg(std::span<const std::uint8_t> data) {
     return thumb;
 }
 
-} // namespace ghidraengine
+}
 
 #ifdef _MSC_VER
 #pragma warning(pop)

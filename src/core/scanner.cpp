@@ -1,13 +1,13 @@
-// Scan cascade: walk → cache lookup → first touch → exact grouping (size,
-// head+tail hash, full hash) → perceptual grouping via MIH → clusters. Each stage
-// only sees what survived the previous one.
 #include "ghidraengine/ghidraengine.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <exception>
 #include <mutex>
+#include <new>
+#include <string>
 #include <system_error>
 #include <unordered_map>
 #include <vector>
@@ -28,10 +28,8 @@
 namespace ghidraengine {
 namespace {
 
-// Above this an image is not loaded whole; the decoder needs it all resident.
 constexpr std::uint64_t kMaxImageBytes = 512ULL * 1024 * 1024;
 
-// Grown once per worker so the steady state never allocates.
 struct ThreadScratch {
     std::vector<std::uint8_t> file_buffer;
     std::vector<std::uint8_t> stream_buffer;
@@ -43,8 +41,6 @@ ThreadScratch& scratch() {
     return storage;
 }
 
-// Caps workers inside a read, independently of how many are decoding: honouring
-// io_threads by shrinking the pool would idle cores during CPU-bound decode.
 class IoLimiter {
 public:
     explicit IoLimiter(unsigned permits) : available_(permits) {}
@@ -77,7 +73,6 @@ public:
     IoGuard(const IoGuard&) = delete;
     IoGuard& operator=(const IoGuard&) = delete;
 
-    // Hands the slot back before CPU work starts.
     void release() noexcept {
         if (limiter_ != nullptr) {
             limiter_->release();
@@ -89,10 +84,31 @@ private:
     IoLimiter* limiter_;
 };
 
+struct LiveStats {
+    std::atomic<std::uint64_t> files_hashed{0};
+    std::atomic<std::uint64_t> images_decoded{0};
+    std::atomic<std::uint64_t> videos_probed{0};
+    std::atomic<std::uint64_t> cache_hits{0};
+    std::atomic<std::uint64_t> bytes_read{0};
+
+    void merge_into(ScanStats& stats) const {
+        constexpr auto relaxed = std::memory_order_relaxed;
+        stats.files_hashed += files_hashed.load(relaxed);
+        stats.images_decoded += images_decoded.load(relaxed);
+        stats.videos_probed += videos_probed.load(relaxed);
+        stats.cache_hits += cache_hits.load(relaxed);
+        stats.bytes_read += bytes_read.load(relaxed);
+    }
+};
+
+void bump(std::atomic<std::uint64_t>& counter, std::uint64_t amount = 1) noexcept {
+    counter.fetch_add(amount, std::memory_order_relaxed);
+}
+
 struct FileWork {
     Signature signature;
     MediaKind media = MediaKind::Unknown;
-    bool usable = false;    // survived filters and produced something comparable
+    bool usable = false;
     bool from_cache = false;
 };
 
@@ -108,16 +124,27 @@ std::uint64_t pixel_count(const FileWork& work) {
     return 0;
 }
 
-} // namespace
+}
 
 struct Scanner::Impl {
     ScanConfig config;
     std::stop_source internal_stop;
 
+    std::uint64_t config_hash = 0;
+
     Result<Report> run(std::span<const std::filesystem::path> roots, std::stop_token token);
 
+    Result<Report> run_guarded(std::span<const std::filesystem::path> roots,
+                               std::stop_token token) try {
+        return run(roots, std::move(token));
+    } catch (const std::bad_alloc&) {
+        return Error{ErrorCode::OutOfMemory, "the scan ran out of memory"};
+    } catch (const std::exception& error) {
+        return Error{ErrorCode::Unknown, error.what()};
+    }
+
     void process_file(const FileEntry& entry, FileWork& work, SignatureCache* cache,
-                      IoLimiter& io, std::vector<FileError>& errors, ScanStats& stats,
+                      IoLimiter& io, std::vector<FileError>& errors, LiveStats& stats,
                       std::mutex& guard);
 
     std::vector<Cluster> find_exact_clusters(const std::vector<FileEntry>& files,
@@ -150,7 +177,7 @@ struct Scanner::Impl {
 
 void Scanner::Impl::process_file(const FileEntry& entry, FileWork& work, SignatureCache* cache,
                                  IoLimiter& io, std::vector<FileError>& errors,
-                                 ScanStats& stats, std::mutex& guard) {
+                                 LiveStats& stats, std::mutex& guard) {
     ThreadScratch& buffers = scratch();
 
     const auto fail = [&](Error error) {
@@ -166,6 +193,7 @@ void Scanner::Impl::process_file(const FileEntry& entry, FileWork& work, Signatu
     key.path = platform::to_utf8(entry.path);
     key.size = entry.size;
     key.mtime_ns = entry.mtime_ns;
+    key.config_hash = config_hash;
 
     if (cache != nullptr && cache->lookup(key, work.media, work.signature)) {
         const bool wanted = (work.media == MediaKind::Image && config.scan_images) ||
@@ -175,16 +203,13 @@ void Scanner::Impl::process_file(const FileEntry& entry, FileWork& work, Signatu
         }
         work.usable = true;
         work.from_cache = true;
-        const std::lock_guard lock(guard);
-        ++stats.cache_hits;
+        bump(stats.cache_hits);
         return;
     }
 
-    // Held until the reads finish; decoding happens after it is given back so CPU
-    // work is never throttled by the I/O budget.
     IoGuard io_guard(io);
 
-    auto file = platform::File::open_read(entry.path, /*sequential=*/true);
+    auto file = platform::File::open_read(entry.path, true);
     if (!file) {
         fail(file.error());
         return;
@@ -205,14 +230,33 @@ void Scanner::Impl::process_file(const FileEntry& entry, FileWork& work, Signatu
         return;
     }
     if (work.media == MediaKind::Unknown) {
-        return; // not media we can compare; skipped, not an error
+        return;
     }
 
     bool produced_something = false;
 
-    // One read serves both the hash and the decoder.
+    const auto hash_head_and_tail = [&] {
+        buffers.partial_buffer.resize(kPartialHashChunk * 2);
+        auto partial = hash_partial(*file, entry.size, buffers.partial_buffer);
+        if (!partial) {
+            fail(partial.error());
+            return false;
+        }
+        work.signature.partial_hash = partial.value();
+        work.signature.has_partial_hash = true;
+        if (partial_hash_is_complete(entry.size)) {
+            work.signature.full_hash = partial.value();
+            work.signature.has_full_hash = true;
+        }
+        bump(stats.bytes_read, std::min<std::uint64_t>(entry.size, kPartialHashChunk * 2));
+        bump(stats.files_hashed);
+        return true;
+    };
+
+    const bool decode_wanted = config.detect_similar && entry.size <= kMaxImageBytes;
+
     if (work.media == MediaKind::Image) {
-        if (entry.size <= kMaxImageBytes) {
+        if (decode_wanted) {
             buffers.file_buffer.resize(static_cast<std::size_t>(entry.size));
             auto read = file->read_at(0, buffers.file_buffer);
             if (!read) {
@@ -221,12 +265,9 @@ void Scanner::Impl::process_file(const FileEntry& entry, FileWork& work, Signatu
             }
             buffers.file_buffer.resize(read.value());
 
-            io_guard.release(); // resident now; everything below is computation
+            io_guard.release();
 
-            {
-                const std::lock_guard lock(guard);
-                stats.bytes_read += read.value();
-            }
+            bump(stats.bytes_read, read.value());
 
             if (config.detect_exact) {
                 work.signature.full_hash = hash_bytes(buffers.file_buffer);
@@ -234,65 +275,41 @@ void Scanner::Impl::process_file(const FileEntry& entry, FileWork& work, Signatu
                 work.signature.partial_hash = work.signature.full_hash;
                 work.signature.has_partial_hash = true;
                 produced_something = true;
-                const std::lock_guard lock(guard);
-                ++stats.files_hashed;
+                bump(stats.files_hashed);
             }
 
-            if (config.detect_similar) {
-                auto thumb = decode_image(buffers.file_buffer);
-                if (thumb) {
-                    const std::uint32_t smallest =
-                        std::min(thumb->source_width, thumb->source_height);
-                    if (smallest >= config.image.min_dimension) {
-                        work.signature.image = compute_signature(*thumb, config.image);
-                        work.signature.has_image = true;
-                        produced_something = true;
-                    }
-                    const std::lock_guard lock(guard);
-                    ++stats.images_decoded;
-                } else if (!config.detect_exact) {
-                    fail(thumb.error()); // only a failure if nothing else was produced
-                    return;
+            auto thumb = decode_image(buffers.file_buffer);
+            if (thumb) {
+                const std::uint32_t smallest =
+                    std::min(thumb->source_width, thumb->source_height);
+                if (smallest >= config.image.min_dimension) {
+                    work.signature.image = compute_signature(*thumb, config.image);
+                    work.signature.has_image = true;
+                    produced_something = true;
                 }
-            }
-        } else if (config.detect_exact) {
-            // Too large to hold; fall back to the streaming cascade.
-            buffers.partial_buffer.resize(kPartialHashChunk * 2);
-            auto partial = hash_partial(*file, entry.size, buffers.partial_buffer);
-            if (!partial) {
-                fail(partial.error());
+                bump(stats.images_decoded);
+            } else if (!config.detect_exact) {
+                fail(thumb.error());
                 return;
             }
-            work.signature.partial_hash = partial.value();
-            work.signature.has_partial_hash = true;
+        } else if (config.detect_exact) {
+            if (!hash_head_and_tail()) {
+                return;
+            }
             produced_something = true;
         }
     }
 
-    // Videos are never read whole; the container is probed instead.
     if (work.media == MediaKind::Video) {
         if (config.detect_exact) {
-            buffers.partial_buffer.resize(kPartialHashChunk * 2);
-            auto partial = hash_partial(*file, entry.size, buffers.partial_buffer);
-            if (!partial) {
-                fail(partial.error());
+            if (!hash_head_and_tail()) {
                 return;
             }
-            work.signature.partial_hash = partial.value();
-            work.signature.has_partial_hash = true;
-            if (partial_hash_is_complete(entry.size)) {
-                work.signature.full_hash = partial.value();
-                work.signature.has_full_hash = true;
-            }
             produced_something = true;
-
-            const std::lock_guard lock(guard);
-            stats.bytes_read += std::min<std::uint64_t>(entry.size, kPartialHashChunk * 2);
-            ++stats.files_hashed;
         }
 
         if (config.detect_similar) {
-            file->close(); // FFmpeg opens the path itself; don't hold two handles
+            file->close();
 
             auto signature = extract_video_signature(entry.path, config.video);
             if (signature) {
@@ -303,8 +320,7 @@ void Scanner::Impl::process_file(const FileEntry& entry, FileWork& work, Signatu
                 fail(signature.error());
                 return;
             }
-            const std::lock_guard lock(guard);
-            ++stats.videos_probed;
+            bump(stats.videos_probed);
         }
     }
 
@@ -329,8 +345,6 @@ std::vector<Cluster> Scanner::Impl::find_exact_clusters(
     const std::stop_token& token, std::vector<FileError>& errors) {
     std::vector<Cluster> clusters;
 
-    // A unique size cannot be a byte-exact duplicate of anything, so the whole
-    // hashing cascade is skipped for it.
     std::unordered_map<std::uint64_t, std::vector<std::uint32_t>> by_size;
     for (std::uint32_t i = 0; i < files.size(); ++i) {
         if (work[i].usable && work[i].signature.has_partial_hash) {
@@ -338,7 +352,6 @@ std::vector<Cluster> Scanner::Impl::find_exact_clusters(
         }
     }
 
-    // Within each size group, split by head+tail hash.
     std::unordered_map<std::uint64_t, std::vector<std::uint32_t>> by_partial;
     std::vector<std::vector<std::uint32_t>> candidates;
 
@@ -357,7 +370,6 @@ std::vector<Cluster> Scanner::Impl::find_exact_clusters(
         }
     }
 
-    // Only survivors the head+tail probe did not already cover pay for a full read.
     std::vector<std::uint32_t> need_full;
     for (const auto& group : candidates) {
         for (const std::uint32_t index : group) {
@@ -378,7 +390,7 @@ std::vector<Cluster> Scanner::Impl::find_exact_clusters(
                 ThreadScratch& buffers = scratch();
                 buffers.stream_buffer.resize(kStreamBufferSize);
 
-                auto file = platform::File::open_read(files[index].path, /*sequential=*/true);
+                auto file = platform::File::open_read(files[index].path, true);
                 if (!file) {
                     const std::lock_guard lock(guard);
                     errors.push_back(FileError{files[index].path, file.error()});
@@ -417,7 +429,6 @@ std::vector<Cluster> Scanner::Impl::find_exact_clusters(
                 continue;
             }
 
-            // The map key is only 64 bits; confirm the full 128, then the bytes.
             std::vector<std::uint32_t> confirmed;
             confirmed.push_back(bucket.front());
             const Hash128& reference = work[bucket.front()].signature.full_hash;
@@ -472,8 +483,6 @@ std::vector<Cluster> Scanner::Impl::find_similar_images(
     MihIndex index;
     index.build(codes);
 
-    // Queries are read-only against the index and each worker owns its pair list,
-    // so no lock appears in the inner loop.
     const std::size_t workers = pool.size() + 1;
     std::vector<std::vector<MatchPair>> per_worker(workers);
     std::atomic<std::uint64_t> queried{0};
@@ -486,7 +495,6 @@ std::vector<Cluster> Scanner::Impl::find_similar_images(
             std::vector<std::uint32_t> visited;
             std::uint32_t epoch = 0;
 
-            // Strided, not blocked: spreads a dense neighbourhood across workers.
             for (std::size_t local = slot; local < subject.size(); local += workers) {
                 if (token.stop_possible() && token.stop_requested()) {
                     return;
@@ -497,7 +505,7 @@ std::vector<Cluster> Scanner::Impl::find_similar_images(
 
                 for (const std::uint32_t other : candidates) {
                     if (other <= local) {
-                        continue; // each pair once
+                        continue;
                     }
 
                     const ImageSignature& a = work[subject[local]].signature.image;
@@ -506,7 +514,6 @@ std::vector<Cluster> Scanner::Impl::find_similar_images(
                         continue;
                     }
 
-                    // Already reported as an exact cluster.
                     if (work[subject[local]].signature.has_full_hash &&
                         work[subject[other]].signature.has_full_hash &&
                         work[subject[local]].signature.full_hash ==
@@ -536,8 +543,6 @@ std::vector<Cluster> Scanner::Impl::find_similar_images(
         pairs.insert(pairs.end(), chunk.begin(), chunk.end());
     }
 
-    // Grouping walks the list in order, so sorting is what makes two runs over the
-    // same corpus produce identical clusters.
     std::sort(pairs.begin(), pairs.end(), [](const MatchPair& a, const MatchPair& b) {
         return a.a != b.a ? a.a < b.a : a.b < b.b;
     });
@@ -586,8 +591,6 @@ std::vector<Cluster> Scanner::Impl::find_similar_videos(
         return {};
     }
 
-    // Sorting by duration turns the O(n^2) comparison into a sliding window: the
-    // scan breaks out as soon as the duration gap exceeds the tolerance.
     std::sort(subject.begin(), subject.end(), [&](std::uint32_t a, std::uint32_t b) {
         return work[a].signature.video.duration_ms < work[b].signature.video.duration_ms;
     });
@@ -604,13 +607,11 @@ std::vector<Cluster> Scanner::Impl::find_similar_videos(
         for (std::uint32_t j = i + 1; j < subject.size(); ++j) {
             const VideoSignature& b = work[subject[j]].signature.video;
 
-            // Sub-clip detection compares across durations, so the window is off
-            // whenever it is on.
             if (!config.video.subclip_detection && a.duration_ms > 0 && b.duration_ms > 0) {
                 const double longer = static_cast<double>(std::max(a.duration_ms, b.duration_ms));
                 if (static_cast<double>(b.duration_ms - a.duration_ms) / longer >
                     config.video.duration_tolerance) {
-                    break; // sorted, so everything beyond is further away still
+                    break;
                 }
             }
 
@@ -621,7 +622,7 @@ std::vector<Cluster> Scanner::Impl::find_similar_videos(
             if (work[subject[i]].signature.has_full_hash &&
                 work[subject[j]].signature.has_full_hash &&
                 work[subject[i]].signature.full_hash == work[subject[j]].signature.full_hash) {
-                continue; // already an exact cluster
+                continue;
             }
 
             pairs.push_back(MatchPair{
@@ -689,6 +690,8 @@ Result<Report> Scanner::Impl::run(std::span<const std::filesystem::path> roots,
         return Error{ErrorCode::InvalidArgument, "no scan roots were given"};
     }
 
+    config_hash = signature_config_hash(config);
+
     const auto started = std::chrono::steady_clock::now();
     Report report;
 
@@ -711,8 +714,6 @@ Result<Report> Scanner::Impl::run(std::span<const std::filesystem::path> roots,
     if (config.cache.enabled) {
         std::filesystem::path cache_path = config.cache.path;
         if (cache_path.empty()) {
-            // Next to the scanned files, never in a user-wide directory: an opt-in
-            // cache stays where the user can see and delete it.
             std::error_code ec;
             const std::filesystem::path& root = roots.front();
             cache_path = (std::filesystem::is_directory(root, ec) ? root : root.parent_path()) /
@@ -723,8 +724,6 @@ Result<Report> Scanner::Impl::run(std::span<const std::filesystem::path> roots,
                 cache_ptr = &cache;
             }
         }
-        // A cache that will not open is a performance loss, not a correctness
-        // problem, so the scan proceeds either way.
     }
 
     const unsigned cpu_threads = config.concurrency.cpu_threads != 0
@@ -733,7 +732,6 @@ Result<Report> Scanner::Impl::run(std::span<const std::filesystem::path> roots,
 
     unsigned io_threads = config.concurrency.io_threads;
     if (io_threads == 0) {
-        // Concurrent reads are a win on flash and a seek storm on rotational media.
         io_threads = platform::is_rotational_storage(roots.front()) ? 2u : cpu_threads;
     }
 
@@ -742,6 +740,7 @@ Result<Report> Scanner::Impl::run(std::span<const std::filesystem::path> roots,
 
     std::vector<FileWork> work(report.files.size());
     std::mutex guard;
+    LiveStats live;
     std::atomic<std::uint64_t> processed{0};
 
     report_progress(Progress::Phase::Decoding, 0, report.files.size());
@@ -750,7 +749,7 @@ Result<Report> Scanner::Impl::run(std::span<const std::filesystem::path> roots,
         pool, 0, report.files.size(),
         [&](std::size_t index) {
             process_file(report.files[index], work[index], cache_ptr, io_limiter,
-                         report.errors, report.stats, guard);
+                         report.errors, live, guard);
 
             const std::uint64_t done = processed.fetch_add(1, std::memory_order_relaxed) + 1;
             if (done % 128 == 0) {
@@ -762,6 +761,8 @@ Result<Report> Scanner::Impl::run(std::span<const std::filesystem::path> roots,
     if (token.stop_possible() && token.stop_requested()) {
         report.cancelled = true;
     }
+
+    live.merge_into(report.stats);
 
     for (const FileWork& item : work) {
         if (item.usable) {
@@ -797,7 +798,6 @@ Result<Report> Scanner::Impl::run(std::span<const std::filesystem::path> roots,
                                std::make_move_iterator(similar.end()));
     }
 
-    // Largest savings first: that is the order a user acts on.
     std::sort(report.clusters.begin(), report.clusters.end(),
               [](const Cluster& a, const Cluster& b) {
                   if (a.reclaimable_bytes != b.reclaimable_bytes) {
@@ -830,22 +830,27 @@ const ScanConfig& Scanner::config() const noexcept { return impl_->config; }
 void Scanner::set_config(ScanConfig config) { impl_->config = std::move(config); }
 
 Result<Report> Scanner::scan(std::span<const std::filesystem::path> roots) {
-    return impl_->run(roots, impl_->internal_stop.get_token());
+    return impl_->run_guarded(roots, impl_->internal_stop.get_token());
 }
 
 Result<Report> Scanner::scan(std::span<const std::filesystem::path> roots,
                              std::stop_token token) {
-    return impl_->run(roots, std::move(token));
+    return impl_->run_guarded(roots, std::move(token));
 }
 
-const char* version_string() noexcept { return "0.1.0"; }
+const char* version_string() noexcept {
+    static const std::string text = std::to_string(Version::major) + "." +
+                                    std::to_string(Version::minor) + "." +
+                                    std::to_string(Version::patch);
+    return text.c_str();
+}
 
 MediaKind probe_media_kind(std::span<const std::uint8_t> header) noexcept {
     return classify_header(header);
 }
 
 MediaKind probe_media_kind(const std::filesystem::path& path) {
-    auto file = platform::File::open_read(path, /*sequential=*/false);
+    auto file = platform::File::open_read(path, false);
     if (!file) {
         return MediaKind::Unknown;
     }
@@ -858,7 +863,7 @@ MediaKind probe_media_kind(const std::filesystem::path& path) {
 }
 
 Result<Hash128> hash_file(const std::filesystem::path& path) {
-    auto file = platform::File::open_read(path, /*sequential=*/true);
+    auto file = platform::File::open_read(path, true);
     if (!file) {
         return file.error();
     }
@@ -867,7 +872,7 @@ Result<Hash128> hash_file(const std::filesystem::path& path) {
 }
 
 Result<Hash128> hash_file_partial(const std::filesystem::path& path, std::uint64_t size) {
-    auto file = platform::File::open_read(path, /*sequential=*/false);
+    auto file = platform::File::open_read(path, false);
     if (!file) {
         return file.error();
     }
@@ -893,4 +898,4 @@ Result<VideoSignature> compute_video_signature(const std::filesystem::path& path
     return extract_video_signature(path, config);
 }
 
-} // namespace ghidraengine
+}

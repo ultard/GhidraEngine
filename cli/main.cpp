@@ -43,7 +43,6 @@ std::string to_utf8(const std::filesystem::path& path) {
     return std::string(utf8.begin(), utf8.end());
 }
 
-// CLI11's ensure_utf8 guarantees argv is UTF-8 on every platform.
 std::filesystem::path to_path(const std::string& utf8) {
     return std::filesystem::path(std::u8string(utf8.begin(), utf8.end()));
 }
@@ -209,7 +208,7 @@ std::uint64_t apply_deletions(const Report& report, bool dry_run) {
     return freed;
 }
 
-} // namespace
+}
 
 int main(int argc, char** argv) {
 #ifdef _WIN32
@@ -297,8 +296,6 @@ int main(int argc, char** argv) {
                  "Delete non-keeper members (dry run unless --confirm is also given)");
     app.add_flag("--confirm", confirm, "Actually perform deletions requested by --delete");
 
-    // Without this, non-ASCII arguments arrive in the local ANSI code page on
-    // Windows and every path built from them is garbage.
     argv = app.ensure_utf8(argv);
     CLI11_PARSE(app, argc, argv);
 
@@ -345,8 +342,6 @@ int main(int argc, char** argv) {
     }
 
     if (!quiet && format == "text") {
-        // Fires from worker threads, so the rate limiter has to be atomic and a
-        // write per file would make stderr the bottleneck.
         auto last = std::make_shared<std::atomic<std::int64_t>>(0);
         constexpr auto kInterval =
             std::chrono::duration_cast<std::chrono::steady_clock::duration>(

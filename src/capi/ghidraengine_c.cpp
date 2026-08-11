@@ -79,7 +79,7 @@ ScanConfig from_c(const ghidraengine_config& source) {
     return config;
 }
 
-} // namespace
+}
 
 struct ghidraengine_report {
     Report report;
@@ -125,7 +125,6 @@ void ghidraengine_config_init(ghidraengine_config* config) {
     if (config == nullptr) {
         return;
     }
-    // Mirrors the C++ defaults rather than restating them, so they cannot drift.
     const ScanConfig defaults;
 
     config->detect_exact = defaults.detect_exact ? 1 : 0;
@@ -206,6 +205,7 @@ void ghidraengine_scanner_cancel(ghidraengine_scanner* scanner) {
     if (scanner == nullptr) {
         return;
     }
+    const std::lock_guard lock(scanner->mutex);
     scanner->stop.request_stop();
 }
 
@@ -232,23 +232,31 @@ ghidraengine_status ghidraengine_scanner_scan(ghidraengine_scanner* scanner, con
             paths.push_back(platform::from_utf8(roots[i]));
         }
 
+        std::stop_source stop;
+        ghidraengine_progress_fn progress = nullptr;
+        void* progress_user_data = nullptr;
+        {
+            const std::lock_guard lock(scanner->mutex);
+            scanner->stop = std::stop_source{};
+            stop = scanner->stop;
+            progress = scanner->progress;
+            progress_user_data = scanner->progress_user_data;
+        }
+        const std::stop_token token = stop.get_token();
+
         ScanConfig config = scanner->config;
-        if (scanner->progress != nullptr) {
-            // A non-zero return is the only way a C caller can stop a scan from
-            // inside the callback.
-            config.on_progress = [scanner](const Progress& progress) {
-                if (scanner->progress(static_cast<int>(progress.phase), progress.processed,
-                                      progress.total, scanner->progress_user_data) != 0) {
-                    scanner->stop.request_stop();
+        if (progress != nullptr) {
+            config.on_progress = [progress, progress_user_data,
+                                  stop](const Progress& update) mutable {
+                if (progress(static_cast<int>(update.phase), update.processed, update.total,
+                             progress_user_data) != 0) {
+                    stop.request_stop();
                 }
             };
         }
 
-        // Fresh per scan, so a previous cancellation does not abort this one.
-        scanner->stop = std::stop_source{};
-
         Scanner engine(std::move(config));
-        auto result = engine.scan(paths, scanner->stop.get_token());
+        auto result = engine.scan(paths, token);
         if (!result) {
             scanner->last_error = result.error().message;
             return to_status(result.error().code);
@@ -279,8 +287,6 @@ ghidraengine_status ghidraengine_scanner_scan(ghidraengine_scanner* scanner, con
         return GHIDRAENGINE_ERR_UNKNOWN;
     }
 }
-
-// --- Report accessors ----------------------------------------------------
 
 void ghidraengine_report_free(ghidraengine_report* report) { delete report; }
 
@@ -425,4 +431,4 @@ void ghidraengine_report_stats(const ghidraengine_report* report, uint64_t* file
     if (elapsed_seconds != nullptr) *elapsed_seconds = stats.elapsed_seconds;
 }
 
-} // extern "C"
+}

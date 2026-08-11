@@ -9,12 +9,10 @@
 namespace ghidraengine {
 namespace {
 
-// Greedy one-to-one: without it, a static shot's near-identical frames would all
-// be satisfied by a single frame of `b` and inflate the score.
 std::uint32_t count_matching_frames(const VideoSignature& a, const VideoSignature& b,
                                     std::uint32_t threshold) {
     std::uint32_t matched = 0;
-    std::uint64_t claimed = 0; // bitmask over b's frames; kMaxVideoFrames <= 64
+    std::uint64_t claimed = 0;
 
     for (std::uint32_t i = 0; i < a.frame_count; ++i) {
         std::uint32_t best_distance = threshold + 1;
@@ -40,8 +38,6 @@ std::uint32_t count_matching_frames(const VideoSignature& a, const VideoSignatur
     return matched;
 }
 
-// Shift of `a` within `b` maximising consecutive agreement. Valid because both
-// signatures are sampled uniformly and so share a cadence.
 double best_ordered_overlap(const VideoSignature& a, const VideoSignature& b,
                             std::uint32_t threshold) {
     if (a.frame_count == 0 || b.frame_count == 0) {
@@ -70,7 +66,7 @@ double best_ordered_overlap(const VideoSignature& a, const VideoSignature& b,
     return best;
 }
 
-} // namespace
+}
 
 double video_similarity(const VideoSignature& a, const VideoSignature& b,
                         const VideoMatchConfig& config) noexcept {
@@ -78,7 +74,6 @@ double video_similarity(const VideoSignature& a, const VideoSignature& b,
         return 0.0;
     }
 
-    // Cheap gate that keeps the quadratic frame matching off the critical path.
     if (!config.subclip_detection && a.duration_ms > 0 && b.duration_ms > 0) {
         const double longer = static_cast<double>(std::max(a.duration_ms, b.duration_ms));
         const double delta =
@@ -89,8 +84,6 @@ double video_similarity(const VideoSignature& a, const VideoSignature& b,
     }
 
     if (config.subclip_detection) {
-        // A cut clip shares an ordered run; the unordered score is kept as a floor
-        // for the equal-length case.
         const double ordered = best_ordered_overlap(a, b, config.frame_threshold);
         const std::uint32_t matched = count_matching_frames(a, b, config.frame_threshold);
         const double unordered = static_cast<double>(matched) /
@@ -99,9 +92,8 @@ double video_similarity(const VideoSignature& a, const VideoSignature& b,
     }
 
     const std::uint32_t matched = count_matching_frames(a, b, config.frame_threshold);
-    // By the smaller count, so a signature that lost frames is not penalised twice.
     return static_cast<double>(matched) /
            static_cast<double>(std::min(a.frame_count, b.frame_count));
 }
 
-} // namespace ghidraengine
+}

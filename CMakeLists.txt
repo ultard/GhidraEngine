@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.25)
 
 if(DEFINED ENV{WINDIR} AND CMAKE_GENERATOR MATCHES "Ninja" AND NOT DEFINED ENV{VCToolsInstallDir})
     message(FATAL_ERROR
@@ -6,8 +6,19 @@ if(DEFINED ENV{WINDIR} AND CMAKE_GENERATOR MATCHES "Ninja" AND NOT DEFINED ENV{V
         "or use the windows-vs preset, which needs no environment.")
 endif()
 
+# One source of truth for the version: the public header, which consumers read
+# anyway. Restating it here is how the two drift.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/include/ghidraengine/ghidraengine.hpp" _version_header)
+string(REGEX MATCH "major = ([0-9]+)" _ "${_version_header}")
+set(_version "${CMAKE_MATCH_1}")
+string(REGEX MATCH "minor = ([0-9]+)" _ "${_version_header}")
+string(APPEND _version ".${CMAKE_MATCH_1}")
+string(REGEX MATCH "patch = ([0-9]+)" _ "${_version_header}")
+string(APPEND _version ".${CMAKE_MATCH_1}")
+unset(_version_header)
+
 project(ghidraengine
-    VERSION 0.1.0
+    VERSION ${_version}
     DESCRIPTION "High-performance duplicate photo and video finder"
     LANGUAGES CXX)
 
@@ -33,9 +44,6 @@ endif()
 include(GNUInstallDirs)
 include(CheckCXXSourceCompiles)
 
-# ---------------------------------------------------------------------------
-# Dependencies
-# ---------------------------------------------------------------------------
 find_package(PkgConfig QUIET)
 find_package(JPEG REQUIRED)
 
@@ -59,9 +67,6 @@ if(NOT FFMPEG_FOUND)
     endif()
 endif()
 
-# ---------------------------------------------------------------------------
-# Portable interface target carrying compiler settings
-# ---------------------------------------------------------------------------
 add_library(ghidraengine_flags INTERFACE)
 
 if(MSVC)
@@ -81,16 +86,8 @@ if(WIN32)
         _WIN32_WINNT=0x0602 WINVER=0x0602 NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
 
-# ---------------------------------------------------------------------------
-# SIMD kernels
-#
-# The DCT and popcount kernels live in dedicated translation units compiled with
-# their own ISA flags, and the right one is chosen at runtime. A global /arch:AVX2
-# would be faster to write and would crash on any pre-2013 CPU.
-# ---------------------------------------------------------------------------
-# The SIMD sources compile into the library like any other, but each carries its
-# own ISA flags via source-file properties. Object libraries would work too, but
-# this keeps every object in one archive with no plumbing to get wrong.
+# Each SIMD source carries its own ISA flags and is chosen at runtime; a global
+# /arch:AVX2 would crash on any pre-2013 CPU.
 set(GHIDRAENGINE_SIMD_SOURCES "")
 set(GHIDRAENGINE_SIMD_DEFINES "")
 
@@ -116,9 +113,6 @@ if(GHIDRAENGINE_ENABLE_SIMD)
     endif()
 endif()
 
-# ---------------------------------------------------------------------------
-# Core library
-# ---------------------------------------------------------------------------
 set(GHIDRAENGINE_SOURCES
     src/core/types.cpp
     src/core/config.cpp
@@ -169,10 +163,8 @@ endif()
 
 target_link_libraries(ghidraengine PRIVATE ghidraengine_flags)
 
-# JPEG
 target_link_libraries(ghidraengine PRIVATE JPEG::JPEG)
 
-# xxHash
 if(TARGET xxHash::xxhash)
     target_link_libraries(ghidraengine PRIVATE xxHash::xxhash)
 else()
@@ -180,14 +172,12 @@ else()
     target_compile_definitions(ghidraengine PRIVATE XXH_INLINE_ALL)
 endif()
 
-# SQLite
 if(TARGET unofficial::sqlite3::sqlite3)
     target_link_libraries(ghidraengine PRIVATE unofficial::sqlite3::sqlite3)
 else()
     target_link_libraries(ghidraengine PRIVATE SQLite::SQLite3)
 endif()
 
-# FFmpeg
 if(TARGET PkgConfig::FFMPEG)
     target_link_libraries(ghidraengine PRIVATE PkgConfig::FFMPEG)
 else()
@@ -219,9 +209,6 @@ if(GHIDRAENGINE_ENABLE_LTO)
     endif()
 endif()
 
-# ---------------------------------------------------------------------------
-# Subdirectories
-# ---------------------------------------------------------------------------
 if(GHIDRAENGINE_BUILD_CLI)
     add_subdirectory(cli)
 endif()
@@ -235,9 +222,6 @@ if(GHIDRAENGINE_BUILD_BENCHMARKS)
     add_subdirectory(bench)
 endif()
 
-# ---------------------------------------------------------------------------
-# Install / export
-# ---------------------------------------------------------------------------
 include(CMakePackageConfigHelpers)
 
 install(TARGETS ghidraengine ghidraengine_flags

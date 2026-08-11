@@ -55,7 +55,7 @@ bool match_class(std::string_view pattern, std::size_t& index, char c) noexcept 
     return matched != negated;
 }
 
-} // namespace
+}
 
 bool glob_match(std::string_view pattern, std::string_view text) noexcept {
     constexpr std::size_t npos = std::string_view::npos;
@@ -130,4 +130,4 @@ bool glob_match(std::string_view pattern, std::string_view text) noexcept {
     return p == pattern.size();
 }
 
-} // namespace ghidraengine
+}

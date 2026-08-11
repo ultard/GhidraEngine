@@ -48,7 +48,6 @@ const char* to_string(Progress::Phase phase) noexcept {
 }
 
 std::size_t FileIdentityHash::operator()(const FileIdentity& id) const noexcept {
-    // Identities are already high-entropy, so a multiply-xor mix is plenty.
     std::uint64_t h = id.volume * 0x9E3779B97F4A7C15ULL;
     h ^= id.id_low + 0x9E3779B97F4A7C15ULL + (h << 6) + (h >> 2);
     h ^= id.id_high + 0x9E3779B97F4A7C15ULL + (h << 6) + (h >> 2);
@@ -56,11 +55,28 @@ std::size_t FileIdentityHash::operator()(const FileIdentity& id) const noexcept 
 }
 
 std::uint64_t Report::total_reclaimable_bytes() const noexcept {
-    std::uint64_t total = 0;
+    std::vector<bool> droppable(files.size(), false);
     for (const auto& cluster : clusters) {
-        total += cluster.reclaimable_bytes;
+        for (const std::uint32_t member : cluster.members) {
+            if (member != cluster.keeper && member < droppable.size()) {
+                droppable[member] = true;
+            }
+        }
+    }
+
+    for (const auto& cluster : clusters) {
+        if (cluster.keeper < droppable.size()) {
+            droppable[cluster.keeper] = false;
+        }
+    }
+
+    std::uint64_t total = 0;
+    for (std::size_t i = 0; i < files.size(); ++i) {
+        if (droppable[i]) {
+            total += files[i].size;
+        }
     }
     return total;
 }
 
-} // namespace ghidraengine
+}

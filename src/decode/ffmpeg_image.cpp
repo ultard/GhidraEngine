@@ -1,6 +1,3 @@
-// Everything JPEG's fast path does not handle: PNG, WebP, AVIF, HEIF, TIFF, BMP,
-// GIF, JPEG XL and TIFF-based camera raw. FFmpeg covers all of them, so no
-// separate PNG or WebP dependency is needed.
 #include "decode/ffmpeg_common.hpp"
 #include "decode/image_decoder.hpp"
 
@@ -39,8 +36,6 @@ Result<Thumbnail> decode_first_frame(std::span<const std::uint8_t> data) {
         return ffmpeg_error(status, "configure decoder");
     }
 
-    // One frame: threading it costs more than it saves, and file-level parallelism
-    // happens a layer up.
     decoder->thread_count = 1;
 
     if (const int status = avcodec_open2(decoder.get(), codec, nullptr); status < 0) {
@@ -89,7 +84,6 @@ Result<Thumbnail> decode_first_frame(std::span<const std::uint8_t> data) {
         }
     }
 
-    // Single-frame codecs commonly hold the picture until end of input.
     avcodec_send_packet(decoder.get(), nullptr);
     auto got = receive();
     if (!got) {
@@ -107,7 +101,7 @@ Result<Thumbnail> decode_first_frame(std::span<const std::uint8_t> data) {
     return Error{ErrorCode::DecodeFailed, "no frame was produced"};
 }
 
-} // namespace
+}
 
 Result<Thumbnail> decode_with_ffmpeg(std::span<const std::uint8_t> data) {
     return decode_first_frame(data);
@@ -118,14 +112,11 @@ Result<Thumbnail> decode_image(std::span<const std::uint8_t> data) {
         return Error{ErrorCode::CorruptFile, "file too short to identify"};
     }
 
-    // The only format whose decoder can scale during decompression.
     if (data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF) {
         auto thumb = decode_jpeg(data);
         if (thumb) {
             return thumb;
         }
-        // FFmpeg sometimes reads a JPEG libjpeg rejects (odd APP segments,
-        // arithmetic coding), so fall through rather than give up.
     }
 
     if (classify_header(data) != MediaKind::Image) {
@@ -135,4 +126,4 @@ Result<Thumbnail> decode_image(std::span<const std::uint8_t> data) {
     return decode_with_ffmpeg(data);
 }
 
-} // namespace ghidraengine
+}

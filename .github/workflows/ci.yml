@@ -81,6 +81,43 @@ jobs:
           path: ghidraengine-${{ matrix.triplet }}.zip
           compression-level: 0
 
+  sanitizers:
+    name: linux-asan-ubsan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y ninja-build nasm autoconf automake libtool pkg-config
+
+      - name: Point presets at vcpkg
+        shell: bash
+        run: |
+          if [ -z "$VCPKG_INSTALLATION_ROOT" ]; then
+            git clone --depth 1 https://github.com/microsoft/vcpkg "$RUNNER_TEMP/vcpkg"
+            "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+            VCPKG_INSTALLATION_ROOT="$RUNNER_TEMP/vcpkg"
+          fi
+          echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
+
+      - name: Cache vcpkg binaries
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-x64-linux-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-x64-linux-
+
+      - run: >
+          cmake --preset linux-debug
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+      - run: cmake --build --preset linux-debug
+      - run: ctest --preset linux-debug --output-on-failure
+        env:
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+          ASAN_OPTIONS: detect_leaks=0
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build

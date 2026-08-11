@@ -14,7 +14,6 @@ ThreadPool::ThreadPool(unsigned threads) {
     if (threads == 0) {
         threads = default_thread_count();
     }
-    // A pool of size 0 would deadlock parallel_for's accounting.
     threads = std::max(1u, threads);
 
     workers_.reserve(threads);
@@ -63,16 +62,8 @@ void ThreadPool::worker_loop() {
         {
             const std::lock_guard lock(mutex_);
             --active_;
-            if (active_ == 0 && tasks_.empty()) {
-                idle_.notify_all();
-            }
         }
     }
 }
 
-void ThreadPool::wait_idle() {
-    std::unique_lock lock(mutex_);
-    idle_.wait(lock, [this] { return tasks_.empty() && active_ == 0; });
 }
-
-} // namespace ghidraengine

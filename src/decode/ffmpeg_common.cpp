@@ -16,16 +16,12 @@ extern "C" {
 namespace ghidraengine {
 namespace {
 
-// libavformat's read-ahead buffer: large enough to keep probe reads out of the
-// callback, small enough that hundreds of concurrent decoders do not balloon.
 constexpr int kIoBufferSize = 32 * 1024;
 
 void silent_log_callback(void*, int, const char*, va_list) {
-    // Empty on purpose: decoder diagnostics surface through Report::errors, and on
-    // stderr they would corrupt the CLI's own output.
 }
 
-} // namespace
+}
 
 void init_ffmpeg() {
     static std::once_flag flag;
@@ -86,7 +82,6 @@ std::int64_t MemoryReader::seek(void* opaque, std::int64_t offset, int whence) {
     auto* self = static_cast<MemoryReader*>(opaque);
     const auto size = static_cast<std::int64_t>(self->data_.size());
 
-    // AVSEEK_SIZE asks for the length; answering it saves the demuxer a probe.
     if (whence == AVSEEK_SIZE) {
         return size;
     }
@@ -110,7 +105,7 @@ Result<FormatContextPtr> MemoryReader::open() {
         return Error{ErrorCode::OutOfMemory, "could not allocate an AVIO buffer"};
     }
 
-    io_ = avio_alloc_context(buffer, kIoBufferSize, /*write_flag=*/0, this, &read_packet,
+    io_ = avio_alloc_context(buffer, kIoBufferSize, 0, this, &read_packet,
                              nullptr, &seek);
     if (io_ == nullptr) {
         av_free(buffer);
@@ -125,7 +120,6 @@ Result<FormatContextPtr> MemoryReader::open() {
     raw->flags |= AVFMT_FLAG_CUSTOM_IO;
 
     if (const int status = avformat_open_input(&raw, nullptr, nullptr, nullptr); status < 0) {
-        // avformat_open_input frees the context itself on failure.
         return ffmpeg_error(status, "open input");
     }
 
@@ -141,7 +135,6 @@ bool pixel_format_is_gray(AVPixelFormat format) noexcept {
     if (descriptor == nullptr) {
         return false;
     }
-    // One or two components (grey, grey+alpha) and not paletted means no chroma.
     const bool paletted = (descriptor->flags & AV_PIX_FMT_FLAG_PAL) != 0;
     return !paletted && descriptor->nb_components <= 2;
 }
@@ -156,12 +149,8 @@ Result<void> frame_to_thumbnail(const AVFrame& frame, SwsPtr& scaler, Thumbnail&
         return Error{ErrorCode::DecodeFailed, "frame has no pixel format"};
     }
 
-    // YUV444P at 32x32: luma at exactly the size the hash wants, chroma along for
-    // free without a second scaler pass.
     constexpr int kTarget = static_cast<int>(kThumbSize);
 
-    // Reuses the scaler when parameters are unchanged — the common case across
-    // the keyframes of one video.
     SwsContext* updated = sws_getCachedContext(
         scaler.release(), frame.width, frame.height, source_format, kTarget, kTarget,
         AV_PIX_FMT_YUV444P, SWS_AREA, nullptr, nullptr, nullptr);
@@ -187,7 +176,6 @@ Result<void> frame_to_thumbnail(const AVFrame& frame, SwsPtr& scaler, Thumbnail&
     thumb.has_color = !pixel_format_is_gray(source_format);
 
     if (thumb.has_color) {
-        // Chroma only feeds a 4x4 colour grid, so 32x32 is more than needed.
         box_resample_channel(planes[1].data(), kThumbSize, kThumbSize, kThumbSize, 1, 0,
                              thumb.cb.data(), kChromaSize, kChromaSize);
         box_resample_channel(planes[2].data(), kThumbSize, kThumbSize, kThumbSize, 1, 0,
@@ -197,4 +185,4 @@ Result<void> frame_to_thumbnail(const AVFrame& frame, SwsPtr& scaler, Thumbnail&
     return {};
 }
 
-} // namespace ghidraengine
+}

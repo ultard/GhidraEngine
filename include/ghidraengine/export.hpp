@@ -1,5 +1,3 @@
-// GHIDRAENGINE_STATIC: set by the CMake target for a static archive.
-// GHIDRAENGINE_BUILDING: set only while compiling the library itself.
 #pragma once
 
 #if defined(GHIDRAENGINE_STATIC)

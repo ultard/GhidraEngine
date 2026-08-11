@@ -1,5 +1,3 @@
-// Boundary invariants: defaults filled in, null arguments rejected rather than
-// crashing, returned pointers valid for the handle's lifetime, no exception out.
 #include <cstring>
 #include <string>
 #include <vector>
@@ -17,7 +15,7 @@ TEST_CASE("C API reports version and defaults", "[capi]") {
     CHECK(std::string(ghidraengine_status_message(GHIDRAENGINE_OK)) == "ok");
 
     ghidraengine_config config;
-    std::memset(&config, 0xAB, sizeof(config)); // poison, so defaults must overwrite
+    std::memset(&config, 0xAB, sizeof(config));
     ghidraengine_config_init(&config);
 
     CHECK(config.detect_exact == 1);
@@ -89,7 +87,7 @@ TEST_CASE("C API finds duplicates end to end", "[capi]") {
         scanner,
         [](int, uint64_t, uint64_t, void* user_data) {
             ++*static_cast<int*>(user_data);
-            return 0; // non-zero would request cancellation
+            return 0;
         },
         &progress_calls);
 
@@ -107,7 +105,6 @@ TEST_CASE("C API finds duplicates end to end", "[capi]") {
     CHECK(ghidraengine_report_total_reclaimable(report) == photo.size());
     CHECK(progress_calls > 0);
 
-    // Every member index must address a real file readable through the accessor.
     for (size_t i = 0; i < ghidraengine_report_cluster_member_count(report, 0); ++i) {
         const uint32_t member = ghidraengine_report_cluster_member(report, 0, i);
         REQUIRE(member < ghidraengine_report_file_count(report));

@@ -13,7 +13,7 @@ Hash128 to_hash128(const XXH128_hash_t& value) noexcept {
     return Hash128{value.low64, value.high64};
 }
 
-} // namespace
+}
 
 Hash128 hash_bytes(std::span<const std::uint8_t> data) noexcept {
     return to_hash128(XXH3_128bits(data.data(), data.size()));
@@ -34,7 +34,6 @@ Result<Hash128> hash_partial(const platform::File& file, std::uint64_t size,
 
     std::size_t total = head.value();
 
-    // For a small file the head already covers everything.
     if (size > kPartialHashChunk) {
         const std::uint64_t tail_offset = size - chunk;
         auto tail = file.read_at(tail_offset, scratch.subspan(total, chunk));
@@ -44,8 +43,6 @@ Result<Hash128> hash_partial(const platform::File& file, std::uint64_t size,
         total += tail.value();
     }
 
-    // Folding in the size stops a truncated download from colliding with its
-    // complete original, whose sampled regions agree.
     XXH3_state_t state;
     XXH3_128bits_reset(&state);
     XXH3_128bits_update(&state, &size, sizeof(size));
@@ -74,7 +71,7 @@ Result<Hash128> hash_full(const platform::File& file, std::span<std::uint8_t> sc
         XXH3_128bits_update(&state, scratch.data(), read.value());
         offset += read.value();
         if (read.value() < scratch.size()) {
-            break; // short read means end of file
+            break;
         }
     }
 
@@ -86,16 +83,15 @@ Result<Hash128> hash_full(const platform::File& file, std::span<std::uint8_t> sc
 
 Result<bool> files_identical(const std::filesystem::path& a, const std::filesystem::path& b,
                              std::uint64_t size) {
-    auto file_a = platform::File::open_read(a, /*sequential=*/true);
+    auto file_a = platform::File::open_read(a, true);
     if (!file_a) {
         return file_a.error();
     }
-    auto file_b = platform::File::open_read(b, /*sequential=*/true);
+    auto file_b = platform::File::open_read(b, true);
     if (!file_b) {
         return file_b.error();
     }
 
-    // A file rewritten mid-scan must not be reported as a verified duplicate.
     auto size_a = file_a->size();
     auto size_b = file_b->size();
     if (!size_a) {
@@ -141,4 +137,4 @@ Result<bool> files_identical(const std::filesystem::path& a, const std::filesyst
     return true;
 }
 
-} // namespace ghidraengine
+}

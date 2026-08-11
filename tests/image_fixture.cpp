@@ -19,7 +19,7 @@ std::uint8_t saturate(int value) {
     return static_cast<std::uint8_t>(std::clamp(value, 0, 255));
 }
 
-} // namespace
+}
 
 Image make_image(std::uint32_t width, std::uint32_t height, std::uint32_t seed) {
     Image image;
@@ -28,7 +28,6 @@ Image make_image(std::uint32_t width, std::uint32_t height, std::uint32_t seed) 
     image.rgb.resize(static_cast<std::size_t>(width) * height * 3);
 
     std::mt19937 rng(seed);
-    // Shapes are large on purpose: a DCT hash encodes low-frequency structure.
     struct Disc {
         double x;
         double y;
@@ -60,7 +59,6 @@ Image make_image(std::uint32_t width, std::uint32_t height, std::uint32_t seed) 
                 const double dy = fy - disc.y;
                 const double distance = std::sqrt(dx * dx + dy * dy);
                 if (distance < disc.radius) {
-                    // Soft edge, so downscaling gives a gradient not a staircase.
                     const double weight = 1.0 - (distance / disc.radius);
                     r = static_cast<int>(r * (1.0 - weight) + disc.r * weight);
                     g = static_cast<int>(g * (1.0 - weight) + disc.g * weight);
@@ -207,7 +205,6 @@ std::vector<std::uint8_t> encode_jpeg(const Image& image, int quality) {
 }
 
 std::vector<std::uint8_t> encode_bmp(const Image& image) {
-    // 24-bit bottom-up BMP: rows are padded to a multiple of four bytes.
     const std::uint32_t row_bytes = image.width * 3;
     const std::uint32_t padding = (4 - (row_bytes % 4)) % 4;
     const std::uint32_t pixel_bytes = (row_bytes + padding) * image.height;
@@ -244,7 +241,7 @@ std::vector<std::uint8_t> encode_bmp(const Image& image) {
         for (std::uint32_t x = 0; x < image.width; ++x) {
             const std::size_t from =
                 (static_cast<std::size_t>(source_row) * image.width + x) * 3;
-            bytes[at++] = image.rgb[from + 2]; // BMP stores BGR
+            bytes[at++] = image.rgb[from + 2];
             bytes[at++] = image.rgb[from + 1];
             bytes[at++] = image.rgb[from + 0];
         }
@@ -284,4 +281,4 @@ TempDir::~TempDir() {
     std::filesystem::remove_all(path_, ec);
 }
 
-} // namespace ghidraengine::test
+}

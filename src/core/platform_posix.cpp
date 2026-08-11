@@ -49,7 +49,7 @@ std::int64_t timespec_to_ns(const struct timespec& ts) {
 #define GHIDRAENGINE_MTIM(st) ((st).st_mtim)
 #endif
 
-} // namespace
+}
 
 Error last_error(std::string_view context) {
     const int code = errno;
@@ -89,10 +89,9 @@ Result<File> File::open_read(const std::filesystem::path& path, bool sequential)
     }
 
 #if defined(POSIX_FADV_SEQUENTIAL)
-    // Tell the kernel how we intend to read so read-ahead is sized correctly.
     ::posix_fadvise(fd, 0, 0, sequential ? POSIX_FADV_SEQUENTIAL : POSIX_FADV_RANDOM);
 #elif defined(F_RDAHEAD)
-    ::fcntl(fd, F_RDAHEAD, sequential ? 1 : 0); // macOS
+    ::fcntl(fd, F_RDAHEAD, sequential ? 1 : 0);
 #else
     (void)sequential;
 #endif
@@ -117,7 +116,7 @@ Result<std::size_t> File::read_at(std::uint64_t offset, std::span<std::uint8_t> 
             return last_error("read");
         }
         if (read == 0) {
-            break; // end of file
+            break;
         }
         total += static_cast<std::size_t>(read);
     }
@@ -162,9 +161,7 @@ Result<void> list_directory(const std::filesystem::path& dir, std::vector<DirEnt
         item.path = dir / name;
         item.is_hidden = name.front() == '.';
 
-        // d_type avoids a stat per entry; DT_UNKNOWN (older XFS, some network
-        // mounts) falls back to lstat.
-#ifdef DT_DIR // glibc, macOS and the BSDs; absent only on exotic libcs
+#ifdef DT_DIR
         switch (entry->d_type) {
             case DT_DIR:
                 item.is_directory = true;
@@ -235,7 +232,6 @@ Result<FileIdentity> identity_of(const std::filesystem::path& path) {
 
 bool is_rotational_storage(const std::filesystem::path& path) {
 #if defined(__linux__)
-    // The kernel's own answer, cached per device: it costs a stat plus a read.
     static std::mutex mutex;
     static std::unordered_map<dev_t, bool> cache;
 
@@ -256,8 +252,7 @@ bool is_rotational_storage(const std::filesystem::path& path) {
     const unsigned major_number = ::major(device);
     const unsigned minor_number = ::minor(device);
 
-    // Partitions carry their parent disk's flag (/dev/sda3 -> /dev/sda).
-    for (const std::string candidate :
+    for (const std::string& candidate :
          {"/sys/dev/block/" + std::to_string(major_number) + ":" +
               std::to_string(minor_number) + "/queue/rotational",
           "/sys/dev/block/" + std::to_string(major_number) + ":" +
@@ -275,18 +270,18 @@ bool is_rotational_storage(const std::filesystem::path& path) {
     return rotational;
 #else
     (void)path;
-    return false; // macOS and BSDs: assume flash storage
+    return false;
 #endif
 }
 
 std::string to_utf8(const std::filesystem::path& path) {
-    return path.native(); // POSIX paths are already byte strings
+    return path.native();
 }
 
 std::filesystem::path from_utf8(std::string_view utf8) {
     return std::filesystem::path(std::string(utf8));
 }
 
-} // namespace ghidraengine::platform
+}
 
-#endif // !_WIN32
+#endif

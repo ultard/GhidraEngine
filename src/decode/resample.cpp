@@ -7,14 +7,11 @@
 namespace ghidraengine {
 namespace {
 
-// Band boundaries, computed once per axis rather than per output pixel.
 std::vector<std::size_t> band_edges(std::size_t total, std::size_t parts) {
     std::vector<std::size_t> edges(parts + 1);
     for (std::size_t i = 0; i <= parts; ++i) {
         edges[i] = i * total / parts;
     }
-    // A source smaller than the target leaves empty bands; widen them so every
-    // output pixel draws from at least one source pixel.
 
     for (std::size_t i = 0; i < parts; ++i) {
         if (edges[i + 1] <= edges[i]) {
@@ -35,7 +32,7 @@ void transform_plane(std::uint8_t* data, std::size_t size, Transform&& map) {
     }
 }
 
-} // namespace
+}
 
 void box_resample_channel(const std::uint8_t* source, std::size_t source_width,
                           std::size_t source_height, std::size_t source_stride,
@@ -59,7 +56,6 @@ void box_resample_channel(const std::uint8_t* source, std::size_t source_width,
 
         for (std::size_t y = y0; y < y1 && y < source_height; ++y) {
             const std::uint8_t* row = source + y * source_stride + channel_index;
-            // One pass over the row, advancing the output column as bands end.
             for (std::size_t out_x = 0; out_x < dst_width; ++out_x) {
                 const std::size_t x0 = cols[out_x];
                 const std::size_t x1 = std::max(x0 + 1, cols[out_x + 1]);
@@ -83,21 +79,20 @@ void box_resample_channel(const std::uint8_t* source, std::size_t source_width,
 
 void apply_exif_orientation(Thumbnail& thumb, std::uint16_t orientation) {
     if (orientation <= 1 || orientation > 8) {
-        return; // 1 is upright; anything else is out of spec
+        return;
     }
 
-    // The source coordinate each output pixel is drawn from.
     const auto map = [orientation](std::size_t x, std::size_t y, std::size_t size)
         -> std::pair<std::size_t, std::size_t> {
         const std::size_t last = size - 1;
         switch (orientation) {
-            case 2: return {last - x, y};               // mirror horizontal
-            case 3: return {last - x, last - y};        // rotate 180
-            case 4: return {x, last - y};               // mirror vertical
-            case 5: return {y, x};                      // transpose
-            case 6: return {y, last - x};               // rotate 90 CW
-            case 7: return {last - y, last - x};        // anti-transpose
-            case 8: return {last - y, x};               // rotate 270 CW
+            case 2: return {last - x, y};
+            case 3: return {last - x, last - y};
+            case 4: return {x, last - y};
+            case 5: return {y, x};
+            case 6: return {y, last - x};
+            case 7: return {last - y, last - x};
+            case 8: return {last - y, x};
             default: return {x, y};
         }
     };
@@ -113,4 +108,4 @@ void apply_exif_orientation(Thumbnail& thumb, std::uint16_t orientation) {
     }
 }
 
-} // namespace ghidraengine
+}

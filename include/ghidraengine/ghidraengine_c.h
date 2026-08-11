@@ -1,10 +1,3 @@
-/*
- * Flat C ABI for language bindings.
- *   - No exception crosses it; every fallible call returns ghidraengine_status.
- *   - All strings are UTF-8, NUL-terminated, owned by the library.
- *   - Pointers from accessors stay valid until the owning handle is freed.
- *   - Handles are not thread-safe; use one per thread.
- */
 #ifndef GHIDRAENGINE_C_H
 #define GHIDRAENGINE_C_H
 
@@ -65,8 +58,6 @@ typedef enum ghidraengine_phase {
     GHIDRAENGINE_PHASE_DONE = 5
 } ghidraengine_phase;
 
-/* Mirrors ghidraengine::ScanConfig as a flat POD. Always initialise through
- * ghidraengine_config_init so fields added in later versions get sane defaults. */
 typedef struct ghidraengine_config {
     int detect_exact;
     int detect_similar;
@@ -74,10 +65,10 @@ typedef struct ghidraengine_config {
     int scan_videos;
 
     uint64_t min_file_size;
-    uint64_t max_file_size; /* 0 = unlimited */
+    uint64_t max_file_size;
     int follow_symlinks;
     int skip_hidden;
-    uint32_t max_depth; /* 0 = unlimited */
+    uint32_t max_depth;
 
     uint32_t phash_threshold;
     uint32_t phash256_threshold;
@@ -95,21 +86,20 @@ typedef struct ghidraengine_config {
     int video_subclip_detection;
 
     int verify_bytes;
-    int cluster_mode;   /* ghidraengine_cluster_mode */
-    int keeper_policy;  /* ghidraengine_keeper_policy */
+    int cluster_mode;
+    int keeper_policy;
 
-    uint32_t cpu_threads; /* 0 = auto */
-    uint32_t io_threads;  /* concurrent reads; 0 = auto-detect from storage type */
+    uint32_t cpu_threads;
+    uint32_t io_threads;
 
     int cache_enabled;
-    const char* cache_path; /* UTF-8, NULL = a database in the first scan root */
+    const char* cache_path;
     uint32_t cache_prune_after_days;
 } ghidraengine_config;
 
 typedef struct ghidraengine_scanner ghidraengine_scanner;
 typedef struct ghidraengine_report ghidraengine_report;
 
-/* Return non-zero from the progress callback to request cancellation. */
 typedef int (*ghidraengine_progress_fn)(int phase, uint64_t processed, uint64_t total, void* user_data);
 
 GHIDRAENGINE_API const char* ghidraengine_version_string(void);
@@ -126,20 +116,14 @@ GHIDRAENGINE_API void ghidraengine_scanner_set_progress(ghidraengine_scanner* sc
                                               ghidraengine_progress_fn callback,
                                               void* user_data);
 
-/* Requests cancellation of a scan running on another thread. */
 GHIDRAENGINE_API void ghidraengine_scanner_cancel(ghidraengine_scanner* scanner);
 
-/* `roots` holds `root_count` UTF-8 paths. On success *out_report must be freed
- * with ghidraengine_report_free. */
 GHIDRAENGINE_API ghidraengine_status ghidraengine_scanner_scan(ghidraengine_scanner* scanner,
                                                 const char* const* roots,
                                                 size_t root_count,
                                                 ghidraengine_report** out_report);
 
-/* Last error message produced by this scanner, or "" if none. */
 GHIDRAENGINE_API const char* ghidraengine_scanner_last_error(const ghidraengine_scanner* scanner);
-
-/* --- Report accessors -------------------------------------------------- */
 
 GHIDRAENGINE_API void ghidraengine_report_free(ghidraengine_report* report);
 GHIDRAENGINE_API int ghidraengine_report_was_cancelled(const ghidraengine_report* report);
@@ -154,7 +138,6 @@ GHIDRAENGINE_API size_t ghidraengine_report_cluster_count(const ghidraengine_rep
 GHIDRAENGINE_API int ghidraengine_report_cluster_match_kind(const ghidraengine_report* report, size_t cluster);
 GHIDRAENGINE_API int ghidraengine_report_cluster_media_kind(const ghidraengine_report* report, size_t cluster);
 GHIDRAENGINE_API size_t ghidraengine_report_cluster_member_count(const ghidraengine_report* report, size_t cluster);
-/* Returns an index into the report's file list. */
 GHIDRAENGINE_API uint32_t ghidraengine_report_cluster_member(const ghidraengine_report* report,
                                                    size_t cluster, size_t member);
 GHIDRAENGINE_API uint32_t ghidraengine_report_cluster_member_distance(const ghidraengine_report* report,
@@ -169,7 +152,6 @@ GHIDRAENGINE_API int ghidraengine_report_error_code(const ghidraengine_report* r
 
 GHIDRAENGINE_API uint64_t ghidraengine_report_total_reclaimable(const ghidraengine_report* report);
 
-/* Statistics; any out pointer may be NULL. */
 GHIDRAENGINE_API void ghidraengine_report_stats(const ghidraengine_report* report,
                                       uint64_t* files_seen,
                                       uint64_t* files_considered,
@@ -181,7 +163,7 @@ GHIDRAENGINE_API void ghidraengine_report_stats(const ghidraengine_report* repor
                                       double* elapsed_seconds);
 
 #ifdef __cplusplus
-} /* extern "C" */
+}
 #endif
 
-#endif /* GHIDRAENGINE_C_H */
+#endif
