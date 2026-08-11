@@ -37,10 +37,7 @@ include(CheckCXXSourceCompiles)
 # Dependencies
 # ---------------------------------------------------------------------------
 find_package(PkgConfig QUIET)
-find_package(libjpeg-turbo CONFIG QUIET)
-if(NOT libjpeg-turbo_FOUND)
-    find_package(JPEG REQUIRED)
-endif()
+find_package(JPEG REQUIRED)
 
 find_package(xxHash CONFIG QUIET)
 if(NOT xxHash_FOUND)
@@ -173,15 +170,7 @@ endif()
 target_link_libraries(ghidraengine PRIVATE ghidraengine_flags)
 
 # JPEG
-if(TARGET libjpeg-turbo::turbojpeg OR TARGET libjpeg-turbo::jpeg)
-    if(TARGET libjpeg-turbo::jpeg)
-        target_link_libraries(ghidraengine PRIVATE libjpeg-turbo::jpeg)
-    else()
-        target_link_libraries(ghidraengine PRIVATE libjpeg-turbo::turbojpeg)
-    endif()
-else()
-    target_link_libraries(ghidraengine PRIVATE JPEG::JPEG)
-endif()
+target_link_libraries(ghidraengine PRIVATE JPEG::JPEG)
 
 # xxHash
 if(TARGET xxHash::xxhash)

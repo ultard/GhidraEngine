@@ -95,10 +95,8 @@
     },
     {
       "name": "windows-vs",
-      "displayName": "Windows x64 Visual Studio 2022 (multi-config)",
+      "displayName": "Windows x64 Visual Studio (multi-config)",
       "inherits": "base",
-      "generator": "Visual Studio 17 2022",
-      "architecture": "x64",
       "condition": {
         "type": "equals",
         "lhs": "${hostSystemName}",

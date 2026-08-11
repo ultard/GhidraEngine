@@ -18,19 +18,9 @@ target_link_libraries(ghidraengine_tests
         ghidraengine_flags
         Catch2::Catch2WithMain)
 
-# Tests reach into the library's internals (the DCT kernels, the MIH index, the
-# format sniffer), so they need the same private definitions the library builds with.
-target_compile_definitions(ghidraengine_tests PRIVATE ${GHIDRAENGINE_SIMD_DEFINES})
 
-# The fixture generator encodes real JPEGs so the accuracy tests exercise the
-# actual decode path rather than synthetic pixel buffers.
-if(TARGET libjpeg-turbo::jpeg)
-    target_link_libraries(ghidraengine_tests PRIVATE libjpeg-turbo::jpeg)
-elseif(TARGET libjpeg-turbo::turbojpeg)
-    target_link_libraries(ghidraengine_tests PRIVATE libjpeg-turbo::turbojpeg)
-else()
-    target_link_libraries(ghidraengine_tests PRIVATE JPEG::JPEG)
-endif()
+target_compile_definitions(ghidraengine_tests PRIVATE ${GHIDRAENGINE_SIMD_DEFINES})
+target_link_libraries(ghidraengine_tests PRIVATE JPEG::JPEG)
 
 include(Catch)
 catch_discover_tests(ghidraengine_tests)

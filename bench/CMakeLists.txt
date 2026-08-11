@@ -17,10 +17,4 @@ target_link_libraries(ghidraengine_bench
 
 target_compile_definitions(ghidraengine_bench PRIVATE ${GHIDRAENGINE_SIMD_DEFINES})
 
-if(TARGET libjpeg-turbo::jpeg)
-    target_link_libraries(ghidraengine_bench PRIVATE libjpeg-turbo::jpeg)
-elseif(TARGET libjpeg-turbo::turbojpeg)
-    target_link_libraries(ghidraengine_bench PRIVATE libjpeg-turbo::turbojpeg)
-else()
-    target_link_libraries(ghidraengine_bench PRIVATE JPEG::JPEG)
-endif()
+target_link_libraries(ghidraengine_bench PRIVATE JPEG::JPEG)
