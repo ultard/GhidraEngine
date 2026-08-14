@@ -192,6 +192,10 @@ Result<VideoSignature> compute_video_signature(const std::filesystem::path&,
 ImageSignature signature_from_thumbnail(std::span<const std::uint8_t> pixels,
                                         const ImageMatchConfig& = {});
 
+Result<VideoPreview> extract_video_preview(const std::filesystem::path&,
+                                           std::uint32_t max_size = 320,
+                                           double position = 0.25);
+
 std::uint32_t hamming_distance(std::uint64_t, std::uint64_t) noexcept;
 std::uint32_t hamming_distance(const Hash256&, const Hash256&) noexcept;
 bool   images_match(const ImageSignature&, const ImageSignature&, const ImageMatchConfig&) noexcept;
@@ -206,6 +210,18 @@ const char* active_simd_backend() noexcept;
 
 `signature_from_thumbnail` ожидает ровно `kThumbSize * kThumbSize` = 1024 байта в
 построчном порядке — это точка входа, если декодированием занимается ваш код.
+
+`extract_video_preview` берёт ближайший ключевой кадр к `position` (доля длительности,
+0–1) и уменьшает его так, чтобы длинная сторона не превышала `max_size`; исходник не
+увеличивается, так что превью может оказаться меньше запрошенного. Неквадратный пиксель
+(анаморфное видео) учитывается, поэтому пропорции совпадают с тем, что показывает плеер.
+
+```cpp
+struct VideoPreview {
+    std::vector<std::uint8_t> rgb;
+    std::uint32_t width, height;
+};
+```
 
 Пример — хранить подписи у себя и сравнивать при добавлении новой картинки:
 

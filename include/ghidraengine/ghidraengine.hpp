@@ -56,6 +56,10 @@ GHIDRAENGINE_API Result<ImageSignature> compute_image_signature(
 GHIDRAENGINE_API Result<VideoSignature> compute_video_signature(
     const std::filesystem::path& path, const VideoMatchConfig& config = {});
 
+GHIDRAENGINE_API Result<VideoPreview> extract_video_preview(const std::filesystem::path& path,
+                                                       std::uint32_t max_size = 320,
+                                                       double position = 0.25);
+
 GHIDRAENGINE_API ImageSignature signature_from_thumbnail(std::span<const std::uint8_t> pixels,
                                                     const ImageMatchConfig& config = {});
 

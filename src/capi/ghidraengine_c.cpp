@@ -88,6 +88,10 @@ struct ghidraengine_report {
     std::vector<std::string> error_messages;
 };
 
+struct ghidraengine_preview {
+    VideoPreview preview;
+};
+
 struct ghidraengine_scanner {
     ScanConfig config;
     std::string last_error;
@@ -430,5 +434,42 @@ void ghidraengine_report_stats(const ghidraengine_report* report, uint64_t* file
     if (bytes_read != nullptr) *bytes_read = stats.bytes_read;
     if (elapsed_seconds != nullptr) *elapsed_seconds = stats.elapsed_seconds;
 }
+
+ghidraengine_status ghidraengine_video_preview(const char* path, uint32_t max_size, double position,
+                                     ghidraengine_preview** out_preview) {
+    if (path == nullptr || out_preview == nullptr) {
+        return GHIDRAENGINE_ERR_INVALID_ARGUMENT;
+    }
+    *out_preview = nullptr;
+
+    try {
+        auto result = extract_video_preview(platform::from_utf8(path), max_size, position);
+        if (!result) {
+            return to_status(result.error().code);
+        }
+        auto wrapper = std::make_unique<ghidraengine_preview>();
+        wrapper->preview = std::move(result).value();
+        *out_preview = wrapper.release();
+        return GHIDRAENGINE_OK;
+    } catch (const std::bad_alloc&) {
+        return GHIDRAENGINE_ERR_OUT_OF_MEMORY;
+    } catch (...) {
+        return GHIDRAENGINE_ERR_UNKNOWN;
+    }
+}
+
+const uint8_t* ghidraengine_preview_pixels(const ghidraengine_preview* preview) {
+    return preview != nullptr ? preview->preview.rgb.data() : nullptr;
+}
+
+uint32_t ghidraengine_preview_width(const ghidraengine_preview* preview) {
+    return preview != nullptr ? preview->preview.width : 0;
+}
+
+uint32_t ghidraengine_preview_height(const ghidraengine_preview* preview) {
+    return preview != nullptr ? preview->preview.height : 0;
+}
+
+void ghidraengine_preview_free(ghidraengine_preview* preview) { delete preview; }
 
 }

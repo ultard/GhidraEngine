@@ -61,6 +61,27 @@ TEST_CASE("C API rejects bad arguments without crashing", "[capi]") {
     }
 }
 
+TEST_CASE("C API video preview validates its arguments", "[capi]") {
+    TempDir dir;
+    const auto photo = encode_jpeg(make_image(64, 48, 7), 90);
+    write_file(dir.path() / "still.jpg", photo);
+    const std::string path = (dir.path() / "still.jpg").string();
+
+    ghidraengine_preview* preview = nullptr;
+
+    CHECK(ghidraengine_video_preview(nullptr, 320, 0.25, &preview) == GHIDRAENGINE_ERR_INVALID_ARGUMENT);
+    CHECK(ghidraengine_video_preview(path.c_str(), 320, 0.25, nullptr) == GHIDRAENGINE_ERR_INVALID_ARGUMENT);
+    CHECK(ghidraengine_video_preview(path.c_str(), 0, 0.25, &preview) == GHIDRAENGINE_ERR_INVALID_ARGUMENT);
+    CHECK(ghidraengine_video_preview((dir.path() / "missing.mp4").string().c_str(), 320, 0.25,
+                                     &preview) != GHIDRAENGINE_OK);
+    CHECK(preview == nullptr);
+
+    CHECK(ghidraengine_preview_pixels(nullptr) == nullptr);
+    CHECK(ghidraengine_preview_width(nullptr) == 0);
+    CHECK(ghidraengine_preview_height(nullptr) == 0);
+    ghidraengine_preview_free(nullptr);
+}
+
 TEST_CASE("C API finds duplicates end to end", "[capi]") {
     TempDir dir;
 

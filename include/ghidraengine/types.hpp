@@ -80,6 +80,12 @@ struct VideoSignature {
     std::array<std::uint64_t, kMaxVideoFrames> sorted{};
 };
 
+struct VideoPreview {
+    std::vector<std::uint8_t> rgb;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+};
+
 struct Signature {
     Hash128 partial_hash{};
     Hash128 full_hash{};

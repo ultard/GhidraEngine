@@ -4,6 +4,7 @@
 #include <cmath>
 #include <vector>
 
+#include "ghidraengine/ghidraengine.hpp"
 #include "core/platform.hpp"
 #include "decode/ffmpeg_common.hpp"
 #include "hash/phash.hpp"
@@ -224,6 +225,77 @@ Result<VideoSignature> extract_video_signature(const std::filesystem::path& path
               signature.sorted.begin() + static_cast<std::ptrdiff_t>(collected));
 
     return signature;
+}
+
+Result<VideoPreview> extract_video_preview(const std::filesystem::path& path,
+                                           std::uint32_t max_size, double position) {
+    if (max_size == 0) {
+        return Error{ErrorCode::InvalidArgument, "preview size must be positive"};
+    }
+
+    auto opened = open_video(path);
+    if (!opened) {
+        return opened.error();
+    }
+    Decoder decoder = std::move(opened.value());
+
+    PacketPtr packet(av_packet_alloc());
+    FramePtr frame(av_frame_alloc());
+    if (!packet || !frame) {
+        return Error{ErrorCode::OutOfMemory, "could not allocate decode buffers"};
+    }
+
+    const std::int64_t duration = container_duration_ms(*decoder.context, *decoder.stream);
+    const std::int64_t timestamp = static_cast<std::int64_t>(
+        std::clamp(position, 0.0, 1.0) * static_cast<double>(duration));
+
+    if (!grab_frame_at(decoder, timestamp, packet.get(), frame.get()) &&
+        (timestamp == 0 || !grab_frame_at(decoder, 0, packet.get(), frame.get()))) {
+        return Error{ErrorCode::DecodeFailed, "no frame could be decoded"};
+    }
+
+    const auto format = static_cast<AVPixelFormat>(frame->format);
+    if (frame->width <= 0 || frame->height <= 0 || format == AV_PIX_FMT_NONE) {
+        av_frame_unref(frame.get());
+        return Error{ErrorCode::DecodeFailed, "decoded frame has no usable pixels"};
+    }
+
+    const AVRational sar = frame->sample_aspect_ratio.num > 0
+                               ? frame->sample_aspect_ratio
+                               : decoder.stream->sample_aspect_ratio;
+    double display_width = frame->width;
+    if (sar.num > 0 && sar.den > 0) {
+        display_width *= av_q2d(sar);
+    }
+
+    const double scale = std::min(1.0, static_cast<double>(max_size) /
+                                           std::max(display_width, static_cast<double>(frame->height)));
+    const int out_width = std::max(1, static_cast<int>(std::lround(display_width * scale)));
+    const int out_height = std::max(1, static_cast<int>(std::lround(frame->height * scale)));
+
+    SwsPtr scaler(sws_getContext(frame->width, frame->height, format, out_width, out_height,
+                                 AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr, nullptr, nullptr));
+    if (!scaler) {
+        av_frame_unref(frame.get());
+        return Error{ErrorCode::DecodeFailed, "could not create a scaler"};
+    }
+
+    VideoPreview preview;
+    preview.width = static_cast<std::uint32_t>(out_width);
+    preview.height = static_cast<std::uint32_t>(out_height);
+    preview.rgb.resize(static_cast<std::size_t>(out_width) * out_height * 3);
+
+    std::uint8_t* destination[4] = {preview.rgb.data(), nullptr, nullptr, nullptr};
+    int strides[4] = {out_width * 3, 0, 0, 0};
+
+    const int rows = sws_scale(scaler.get(), frame->data, frame->linesize, 0, frame->height,
+                               destination, strides);
+    av_frame_unref(frame.get());
+    if (rows <= 0) {
+        return Error{ErrorCode::DecodeFailed, "scaling produced no rows"};
+    }
+
+    return preview;
 }
 
 }

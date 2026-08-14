@@ -86,6 +86,7 @@ ghidraengine_scanner_set_progress(scanner, on_progress, NULL);
 | Кластеры | `ghidraengine_report_cluster_count/match_kind/media_kind/member_count/member/member_distance/keeper/reclaimable` |
 | Ошибки | `ghidraengine_report_error_count/path/message/code` |
 | Итоги | `ghidraengine_report_total_reclaimable`, `ghidraengine_report_stats`, `ghidraengine_report_was_cancelled` |
+| Превью | `ghidraengine_video_preview`, `ghidraengine_preview_pixels/width/height/free` |
 | Освобождение | `ghidraengine_report_free`, `ghidraengine_scanner_free` |
 
 `ghidraengine_report_stats` принимает восемь выходных указателей, любой из них можно
@@ -94,6 +95,25 @@ ghidraengine_scanner_set_progress(scanner, on_progress, NULL);
 Чего в C ABI нет: `exclude_patterns`, `probe_unknown_extensions` и колбэк ошибок по файлам.
 Ошибки читаются из отчёта после скана; фильтрацию путей проще сделать на стороне
 вызывающего языка.
+
+## Превью видео
+
+```c
+ghidraengine_preview* preview = NULL;
+/* 320 — предел длинной стороны, 0.25 — позиция в долях длительности */
+if (ghidraengine_video_preview("/movies/a.mkv", 320, 0.25, &preview) == GHIDRAENGINE_OK) {
+    const uint8_t* rgb = ghidraengine_preview_pixels(preview);   /* RGB24, stride = width * 3 */
+    const uint32_t w = ghidraengine_preview_width(preview);
+    const uint32_t h = ghidraengine_preview_height(preview);
+    /* ... отдать в свой тулкит ... */
+    ghidraengine_preview_free(preview);
+}
+```
+
+Кадр берётся ближайший ключевой, изображение только уменьшается: для видео меньше
+`max_size` вернётся исходный размер. Пропорции учитывают неквадратный пиксель, так что
+`width/height` может не совпадать с `codecpar` анаморфного файла. Хендл не зависит от
+сканера и живёт до `ghidraengine_preview_free`.
 
 ## Python (ctypes)
 

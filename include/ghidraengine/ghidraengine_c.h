@@ -99,6 +99,7 @@ typedef struct ghidraengine_config {
 
 typedef struct ghidraengine_scanner ghidraengine_scanner;
 typedef struct ghidraengine_report ghidraengine_report;
+typedef struct ghidraengine_preview ghidraengine_preview;
 
 typedef int (*ghidraengine_progress_fn)(int phase, uint64_t processed, uint64_t total, void* user_data);
 
@@ -161,6 +162,16 @@ GHIDRAENGINE_API void ghidraengine_report_stats(const ghidraengine_report* repor
                                       uint64_t* cache_hits,
                                       uint64_t* bytes_read,
                                       double* elapsed_seconds);
+
+GHIDRAENGINE_API ghidraengine_status ghidraengine_video_preview(const char* path,
+                                                      uint32_t max_size,
+                                                      double position,
+                                                      ghidraengine_preview** out_preview);
+
+GHIDRAENGINE_API const uint8_t* ghidraengine_preview_pixels(const ghidraengine_preview* preview);
+GHIDRAENGINE_API uint32_t ghidraengine_preview_width(const ghidraengine_preview* preview);
+GHIDRAENGINE_API uint32_t ghidraengine_preview_height(const ghidraengine_preview* preview);
+GHIDRAENGINE_API void ghidraengine_preview_free(ghidraengine_preview* preview);
 
 #ifdef __cplusplus
 }
