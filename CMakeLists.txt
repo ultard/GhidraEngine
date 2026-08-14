@@ -6,8 +6,6 @@ if(DEFINED ENV{WINDIR} AND CMAKE_GENERATOR MATCHES "Ninja" AND NOT DEFINED ENV{V
         "or use the windows-vs preset, which needs no environment.")
 endif()
 
-# One source of truth for the version: the public header, which consumers read
-# anyway. Restating it here is how the two drift.
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/include/ghidraengine/ghidraengine.hpp" _version_header)
 string(REGEX MATCH "major = ([0-9]+)" _ "${_version_header}")
 set(_version "${CMAKE_MATCH_1}")
@@ -24,6 +22,7 @@ project(ghidraengine
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
+option(BUILD_SHARED_LIBS "Build ghidraengine as a shared library" ON)
 option(GHIDRAENGINE_BUILD_CLI "Build the ghidraengine command line tool" ON)
 option(GHIDRAENGINE_BUILD_TESTS "Build unit tests" ON)
 option(GHIDRAENGINE_BUILD_BENCHMARKS "Build micro benchmarks" OFF)
@@ -40,6 +39,8 @@ set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "" FORCE)
 endif()
+
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 include(GNUInstallDirs)
 include(CheckCXXSourceCompiles)
@@ -73,6 +74,7 @@ if(MSVC)
     target_compile_options(ghidraengine_flags INTERFACE
         /W4 /permissive- /Zc:__cplusplus /Zc:preprocessor /utf-8 /MP
         /D_CRT_SECURE_NO_WARNINGS
+        /wd4251
         $<$<NOT:$<CONFIG:Debug>>:/Oi /Gy /GS->)
 else()
     # -fno-plt is an ELF thing; Apple clang just warns it is unused.
@@ -86,8 +88,6 @@ if(WIN32)
         _WIN32_WINNT=0x0602 WINVER=0x0602 NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
 
-# Each SIMD source carries its own ISA flags and is chosen at runtime; a global
-# /arch:AVX2 would crash on any pre-2013 CPU.
 set(GHIDRAENGINE_SIMD_SOURCES "")
 set(GHIDRAENGINE_SIMD_DEFINES "")
 
@@ -99,7 +99,6 @@ if(GHIDRAENGINE_ENABLE_SIMD)
         if(MSVC)
             set_source_files_properties(src/hash/dct_avx2.cpp
                 PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
-            # SSE2 is implied by the x64 ABI; MSVC rejects /arch:SSE2 there.
         else()
             set_source_files_properties(src/hash/dct_avx2.cpp
                 PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-mpopcnt")
@@ -107,7 +106,6 @@ if(GHIDRAENGINE_ENABLE_SIMD)
                 PROPERTIES COMPILE_OPTIONS "-msse2")
         endif()
     elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "(aarch64|arm64|ARM64)")
-        # NEON is baseline on AArch64, so no per-file flags are needed.
         list(APPEND GHIDRAENGINE_SIMD_SOURCES src/hash/dct_neon.cpp)
         list(APPEND GHIDRAENGINE_SIMD_DEFINES GHIDRAENGINE_NEON_SIMD=1)
     endif()
@@ -143,53 +141,62 @@ else()
     list(APPEND GHIDRAENGINE_SOURCES src/core/platform_posix.cpp)
 endif()
 
-add_library(ghidraengine ${GHIDRAENGINE_SOURCES} ${GHIDRAENGINE_SIMD_SOURCES})
+add_library(ghidraengine_deps INTERFACE)
+
+find_package(Threads REQUIRED)
+target_link_libraries(ghidraengine_deps INTERFACE JPEG::JPEG Threads::Threads)
+
+if(TARGET xxHash::xxhash)
+    target_link_libraries(ghidraengine_deps INTERFACE xxHash::xxhash)
+else()
+    target_include_directories(ghidraengine_deps INTERFACE $<BUILD_INTERFACE:${XXHASH_INCLUDE_DIR}>)
+    target_compile_definitions(ghidraengine_deps INTERFACE XXH_INLINE_ALL)
+endif()
+
+if(TARGET unofficial::sqlite3::sqlite3)
+    target_link_libraries(ghidraengine_deps INTERFACE unofficial::sqlite3::sqlite3)
+else()
+    target_link_libraries(ghidraengine_deps INTERFACE SQLite::SQLite3)
+endif()
+
+if(TARGET PkgConfig::FFMPEG)
+    target_link_libraries(ghidraengine_deps INTERFACE PkgConfig::FFMPEG)
+else()
+    target_include_directories(ghidraengine_deps INTERFACE $<BUILD_INTERFACE:${FFMPEG_INCLUDE_DIRS}>)
+    target_link_libraries(ghidraengine_deps INTERFACE ${FFMPEG_LIBRARIES})
+endif()
+
+if(WIN32)
+    target_link_libraries(ghidraengine_deps INTERFACE shlwapi)
+endif()
+
+add_library(ghidraengine_objects OBJECT ${GHIDRAENGINE_SOURCES} ${GHIDRAENGINE_SIMD_SOURCES})
+
+target_include_directories(ghidraengine_objects
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+target_compile_definitions(ghidraengine_objects
+    PUBLIC GHIDRAENGINE_BUILDING ${GHIDRAENGINE_SIMD_DEFINES})
+
+target_link_libraries(ghidraengine_objects PUBLIC ghidraengine_deps PRIVATE ghidraengine_flags)
+
+add_library(ghidraengine $<TARGET_OBJECTS:ghidraengine_objects>)
 add_library(ghidraengine::ghidraengine ALIAS ghidraengine)
 
 target_include_directories(ghidraengine
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 
-target_compile_definitions(ghidraengine
-    PRIVATE GHIDRAENGINE_BUILDING ${GHIDRAENGINE_SIMD_DEFINES})
+target_link_libraries(ghidraengine
+    PRIVATE ghidraengine_flags ghidraengine_deps
+    PUBLIC Threads::Threads)
 
-get_target_property(GHIDRAENGINE_TYPE ghidraengine TYPE)
-if(GHIDRAENGINE_TYPE STREQUAL "STATIC_LIBRARY")
+if(NOT BUILD_SHARED_LIBS)
     target_compile_definitions(ghidraengine PUBLIC GHIDRAENGINE_STATIC)
-endif()
-
-target_link_libraries(ghidraengine PRIVATE ghidraengine_flags)
-
-target_link_libraries(ghidraengine PRIVATE JPEG::JPEG)
-
-if(TARGET xxHash::xxhash)
-    target_link_libraries(ghidraengine PRIVATE xxHash::xxhash)
-else()
-    target_include_directories(ghidraengine PRIVATE ${XXHASH_INCLUDE_DIR})
-    target_compile_definitions(ghidraengine PRIVATE XXH_INLINE_ALL)
-endif()
-
-if(TARGET unofficial::sqlite3::sqlite3)
-    target_link_libraries(ghidraengine PRIVATE unofficial::sqlite3::sqlite3)
-else()
-    target_link_libraries(ghidraengine PRIVATE SQLite::SQLite3)
-endif()
-
-if(TARGET PkgConfig::FFMPEG)
-    target_link_libraries(ghidraengine PRIVATE PkgConfig::FFMPEG)
-else()
-    target_include_directories(ghidraengine PRIVATE ${FFMPEG_INCLUDE_DIRS})
-    target_link_libraries(ghidraengine PRIVATE ${FFMPEG_LIBRARIES})
-endif()
-
-find_package(Threads REQUIRED)
-target_link_libraries(ghidraengine PUBLIC Threads::Threads)
-
-if(WIN32)
-    target_link_libraries(ghidraengine PRIVATE shlwapi)
+    target_compile_definitions(ghidraengine_objects PUBLIC GHIDRAENGINE_STATIC)
 endif()
 
 set_target_properties(ghidraengine PROPERTIES
@@ -201,7 +208,8 @@ if(GHIDRAENGINE_ENABLE_LTO)
     include(CheckIPOSupported)
     check_ipo_supported(RESULT GHIDRAENGINE_IPO_OK OUTPUT GHIDRAENGINE_IPO_MSG)
     if(GHIDRAENGINE_IPO_OK)
-        set_target_properties(ghidraengine PROPERTIES
+        # Both targets: the objects carry the compile side, ghidraengine the link side.
+        set_target_properties(ghidraengine ghidraengine_objects PROPERTIES
             INTERPROCEDURAL_OPTIMIZATION_RELEASE ON
             INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO ON)
     else()
@@ -224,7 +232,7 @@ endif()
 
 include(CMakePackageConfigHelpers)
 
-install(TARGETS ghidraengine ghidraengine_flags
+install(TARGETS ghidraengine ghidraengine_flags ghidraengine_deps
     EXPORT ghidraengineTargets
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -254,6 +262,8 @@ install(FILES
 
 message(STATUS "ghidraengine ${PROJECT_VERSION}")
 message(STATUS "  build type : ${CMAKE_BUILD_TYPE}")
+get_target_property(GHIDRAENGINE_TYPE ghidraengine TYPE)
+message(STATUS "  library    : ${GHIDRAENGINE_TYPE}")
 message(STATUS "  SIMD       : ${GHIDRAENGINE_ENABLE_SIMD}")
 message(STATUS "  CLI        : ${GHIDRAENGINE_BUILD_CLI}")
 message(STATUS "  tests      : ${GHIDRAENGINE_BUILD_TESTS}")

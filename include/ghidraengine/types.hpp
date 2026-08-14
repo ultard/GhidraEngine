@@ -22,14 +22,14 @@ enum class MediaKind : std::uint8_t {
     Video,
 };
 
-const char* to_string(MediaKind kind) noexcept;
+GHIDRAENGINE_API const char* to_string(MediaKind kind) noexcept;
 
 enum class MatchKind : std::uint8_t {
     Exact = 0,
     Similar,
 };
 
-const char* to_string(MatchKind kind) noexcept;
+GHIDRAENGINE_API const char* to_string(MatchKind kind) noexcept;
 
 struct Hash128 {
     std::uint64_t low = 0;
@@ -50,7 +50,7 @@ struct FileIdentity {
 };
 
 struct FileIdentityHash {
-    std::size_t operator()(const FileIdentity& id) const noexcept;
+    GHIDRAENGINE_API std::size_t operator()(const FileIdentity& id) const noexcept;
 };
 
 struct FileEntry {
@@ -124,7 +124,7 @@ struct Report {
     ScanStats stats;
     bool cancelled = false;
 
-    [[nodiscard]] std::uint64_t total_reclaimable_bytes() const noexcept;
+    [[nodiscard]] GHIDRAENGINE_API std::uint64_t total_reclaimable_bytes() const noexcept;
 };
 
 struct Progress {
@@ -142,6 +142,6 @@ struct Progress {
     std::uint64_t total = 0;
 };
 
-const char* to_string(Progress::Phase phase) noexcept;
+GHIDRAENGINE_API const char* to_string(Progress::Phase phase) noexcept;
 
 }

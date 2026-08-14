@@ -5,6 +5,8 @@
 #include <utility>
 #include <variant>
 
+#include "ghidraengine/export.hpp"
+
 namespace ghidraengine {
 
 enum class ErrorCode {
@@ -22,7 +24,7 @@ enum class ErrorCode {
     Unknown,
 };
 
-const char* to_string(ErrorCode code) noexcept;
+GHIDRAENGINE_API const char* to_string(ErrorCode code) noexcept;
 
 struct Error {
     ErrorCode code = ErrorCode::Unknown;

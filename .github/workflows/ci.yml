@@ -75,6 +75,13 @@ jobs:
           fi
           cmake -E chdir dist cmake -E tar cf ../ghidraengine-${{ matrix.triplet }}.zip --format=zip .
 
+      - name: Smoke-test the C ABI
+        shell: bash
+        run: |
+          # Every runner image ships a Python; which name it answers to varies.
+          PY=$(command -v python3 || command -v python)
+          "$PY" .github/scripts/ffi_smoke.py dist
+
       - uses: actions/upload-artifact@v7
         with:
           name: ghidraengine-${{ matrix.triplet }}
@@ -112,6 +119,7 @@ jobs:
           cmake --preset linux-debug
           -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined"
       - run: cmake --build --preset linux-debug
       - run: ctest --preset linux-debug --output-on-failure
         env:

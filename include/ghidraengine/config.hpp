@@ -97,7 +97,7 @@ struct ScanConfig {
     std::function<void(const Progress&)> on_progress;
     std::function<void(const FileError&)> on_error;
 
-    [[nodiscard]] Result<void> validate() const;
+    [[nodiscard]] GHIDRAENGINE_API Result<void> validate() const;
 };
 
 }

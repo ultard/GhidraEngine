@@ -25,10 +25,7 @@ target_link_libraries(my_app PRIVATE ghidraengine::ghidraengine)
 | `GHIDRAENGINE_BUILD_BENCHMARKS` | OFF | собирать `ghidraengine_bench` |
 | `GHIDRAENGINE_ENABLE_LTO` | ON | LTO в оптимизированных конфигурациях |
 | `GHIDRAENGINE_ENABLE_SIMD` | ON | SIMD-ядра с рантайм-диспетчеризацией |
-| `BUILD_SHARED_LIBS` | OFF | собрать .dll/.so вместо статической библиотеки |
-
-При статической сборке цель публично определяет `GHIDRAENGINE_STATIC`, так что
-`GHIDRAENGINE_API` схлопывается в пустоту — потребителю ничего настраивать не нужно.
+| `BUILD_SHARED_LIBS` | ON | .dll/.so; `OFF` даёт статическую библиотеку |
 
 ## Минимальный пример
 

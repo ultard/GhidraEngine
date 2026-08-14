@@ -7,20 +7,13 @@ add_executable(ghidraengine_tests
     test_scan.cpp
     test_capi.cpp)
 
-target_include_directories(ghidraengine_tests
-    PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(ghidraengine_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(ghidraengine_tests
     PRIVATE
-        ghidraengine::ghidraengine
+        ghidraengine_objects
         ghidraengine_flags
         Catch2::Catch2WithMain)
-
-
-target_compile_definitions(ghidraengine_tests PRIVATE ${GHIDRAENGINE_SIMD_DEFINES})
-target_link_libraries(ghidraengine_tests PRIVATE JPEG::JPEG)
 
 include(Catch)
 catch_discover_tests(ghidraengine_tests)
