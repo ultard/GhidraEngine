@@ -3,9 +3,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 
 add_executable(ghidraengine_cli main.cpp)
 
-set_target_properties(ghidraengine_cli PROPERTIES
-    OUTPUT_NAME ghidraengine
-    INSTALL_RPATH "$<IF:$<PLATFORM_ID:Darwin>,@loader_path/../lib,$ORIGIN/../lib>")
+set_target_properties(ghidraengine_cli PROPERTIES OUTPUT_NAME ghidraengine)
 
 target_link_libraries(ghidraengine_cli
     PRIVATE

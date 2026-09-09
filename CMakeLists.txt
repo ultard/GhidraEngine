@@ -41,6 +41,11 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+if(APPLE)
+    set(CMAKE_INSTALL_RPATH "@loader_path/../lib")
+else()
+    set(CMAKE_INSTALL_RPATH "$ORIGIN/../lib")
+endif()
 
 include(GNUInstallDirs)
 include(CheckCXXSourceCompiles)
@@ -74,7 +79,6 @@ if(MSVC)
     target_compile_options(ghidraengine_flags INTERFACE
         /W4 /permissive- /Zc:__cplusplus /Zc:preprocessor /utf-8 /MP
         /D_CRT_SECURE_NO_WARNINGS
-        /wd4251
         $<$<NOT:$<CONFIG:Debug>>:/Oi /Gy /GS->)
 else()
     # -fno-plt is an ELF thing; Apple clang just warns it is unused.
@@ -194,7 +198,8 @@ target_link_libraries(ghidraengine
     PRIVATE ghidraengine_flags ghidraengine_deps
     PUBLIC Threads::Threads)
 
-if(NOT BUILD_SHARED_LIBS)
+get_target_property(GHIDRAENGINE_TYPE ghidraengine TYPE)
+if(GHIDRAENGINE_TYPE STREQUAL "STATIC_LIBRARY")
     target_compile_definitions(ghidraengine PUBLIC GHIDRAENGINE_STATIC)
     target_compile_definitions(ghidraengine_objects PUBLIC GHIDRAENGINE_STATIC)
 endif()
@@ -262,7 +267,6 @@ install(FILES
 
 message(STATUS "ghidraengine ${PROJECT_VERSION}")
 message(STATUS "  build type : ${CMAKE_BUILD_TYPE}")
-get_target_property(GHIDRAENGINE_TYPE ghidraengine TYPE)
 message(STATUS "  library    : ${GHIDRAENGINE_TYPE}")
 message(STATUS "  SIMD       : ${GHIDRAENGINE_ENABLE_SIMD}")
 message(STATUS "  CLI        : ${GHIDRAENGINE_BUILD_CLI}")

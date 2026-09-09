@@ -23,6 +23,12 @@ GHIDRAENGINE_API const char* version_string() noexcept;
 
 GHIDRAENGINE_API const char* active_simd_backend() noexcept;
 
+#ifdef _MSC_VER
+#pragma warning(push)
+// impl_ is a pimpl: no inline code touches it, so its layout never crosses the DLL boundary.
+#pragma warning(disable : 4251)
+#endif
+
 class GHIDRAENGINE_API Scanner {
 public:
     explicit Scanner(ScanConfig config = {});
@@ -44,6 +50,10 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 
 GHIDRAENGINE_API Result<Hash128> hash_file(const std::filesystem::path& path);
 

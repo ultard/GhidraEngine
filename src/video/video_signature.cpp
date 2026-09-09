@@ -249,24 +249,23 @@ Result<VideoPreview> extract_video_preview(const std::filesystem::path& path,
     const std::int64_t timestamp = static_cast<std::int64_t>(
         std::clamp(position, 0.0, 1.0) * static_cast<double>(duration));
 
-    if (!grab_frame_at(decoder, timestamp, packet.get(), frame.get()) &&
-        (timestamp == 0 || !grab_frame_at(decoder, 0, packet.get(), frame.get()))) {
+    bool grabbed = grab_frame_at(decoder, timestamp, packet.get(), frame.get());
+    if (!grabbed && timestamp != 0) {
+        grabbed = grab_frame_at(decoder, 0, packet.get(), frame.get());
+    }
+    if (!grabbed) {
         return Error{ErrorCode::DecodeFailed, "no frame could be decoded"};
     }
 
     const auto format = static_cast<AVPixelFormat>(frame->format);
     if (frame->width <= 0 || frame->height <= 0 || format == AV_PIX_FMT_NONE) {
-        av_frame_unref(frame.get());
         return Error{ErrorCode::DecodeFailed, "decoded frame has no usable pixels"};
     }
 
-    const AVRational sar = frame->sample_aspect_ratio.num > 0
-                               ? frame->sample_aspect_ratio
-                               : decoder.stream->sample_aspect_ratio;
-    double display_width = frame->width;
-    if (sar.num > 0 && sar.den > 0) {
-        display_width *= av_q2d(sar);
-    }
+    const AVRational sar =
+        av_guess_sample_aspect_ratio(decoder.context.get(), decoder.stream, frame.get());
+    const double display_width =
+        frame->width * (sar.num > 0 && sar.den > 0 ? av_q2d(sar) : 1.0);
 
     const double scale = std::min(1.0, static_cast<double>(max_size) /
                                            std::max(display_width, static_cast<double>(frame->height)));
@@ -276,7 +275,6 @@ Result<VideoPreview> extract_video_preview(const std::filesystem::path& path,
     SwsPtr scaler(sws_getContext(frame->width, frame->height, format, out_width, out_height,
                                  AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr, nullptr, nullptr));
     if (!scaler) {
-        av_frame_unref(frame.get());
         return Error{ErrorCode::DecodeFailed, "could not create a scaler"};
     }
 
@@ -290,7 +288,6 @@ Result<VideoPreview> extract_video_preview(const std::filesystem::path& path,
 
     const int rows = sws_scale(scaler.get(), frame->data, frame->linesize, 0, frame->height,
                                destination, strides);
-    av_frame_unref(frame.get());
     if (rows <= 0) {
         return Error{ErrorCode::DecodeFailed, "scaling produced no rows"};
     }

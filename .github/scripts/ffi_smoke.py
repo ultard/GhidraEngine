@@ -14,7 +14,7 @@ prefix = Path(sys.argv[1] if len(sys.argv) > 1 else "dist")
 
 candidates = [p for pattern in ("bin/ghidraengine.dll", "lib/libghidraengine.so*",
                                 "lib/libghidraengine*.dylib")
-              for p in prefix.glob(pattern) if not p.is_symlink()]
+              for p in prefix.glob(pattern)]
 if not candidates:
     sys.exit(f"no shared library under {prefix}: {sorted(p.name for p in prefix.rglob('*'))}")
 

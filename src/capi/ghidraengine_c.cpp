@@ -88,9 +88,7 @@ struct ghidraengine_report {
     std::vector<std::string> error_messages;
 };
 
-struct ghidraengine_preview {
-    VideoPreview preview;
-};
+struct ghidraengine_preview : VideoPreview {};
 
 struct ghidraengine_scanner {
     ScanConfig config;
@@ -447,9 +445,7 @@ ghidraengine_status ghidraengine_video_preview(const char* path, uint32_t max_si
         if (!result) {
             return to_status(result.error().code);
         }
-        auto wrapper = std::make_unique<ghidraengine_preview>();
-        wrapper->preview = std::move(result).value();
-        *out_preview = wrapper.release();
+        *out_preview = new ghidraengine_preview{std::move(result).value()};
         return GHIDRAENGINE_OK;
     } catch (const std::bad_alloc&) {
         return GHIDRAENGINE_ERR_OUT_OF_MEMORY;
@@ -459,15 +455,15 @@ ghidraengine_status ghidraengine_video_preview(const char* path, uint32_t max_si
 }
 
 const uint8_t* ghidraengine_preview_pixels(const ghidraengine_preview* preview) {
-    return preview != nullptr ? preview->preview.rgb.data() : nullptr;
+    return preview != nullptr ? preview->rgb.data() : nullptr;
 }
 
 uint32_t ghidraengine_preview_width(const ghidraengine_preview* preview) {
-    return preview != nullptr ? preview->preview.width : 0;
+    return preview != nullptr ? preview->width : 0;
 }
 
 uint32_t ghidraengine_preview_height(const ghidraengine_preview* preview) {
-    return preview != nullptr ? preview->preview.height : 0;
+    return preview != nullptr ? preview->height : 0;
 }
 
 void ghidraengine_preview_free(ghidraengine_preview* preview) { delete preview; }
