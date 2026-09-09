@@ -239,62 +239,89 @@ int main(int argc, char** argv) {
     std::string keeper = "resolution";
 
     app.add_option("-f,--format", format, "Output format: text, json, csv")
-        ->check(CLI::IsMember({"text", "json", "csv"}));
+        ->check(CLI::IsMember({"text", "json", "csv"}))
+        ->group("Output");
     app.add_option("-o,--output", output_file,
-                   "Write the report to a file instead of stdout");
+                   "Write the report to a file instead of stdout")
+        ->group("Output");
+    app.add_flag("-q,--quiet", quiet, "Suppress progress output")->group("Output");
+    app.add_flag("--all-errors", all_errors, "List every unreadable file")->group("Output");
 
-    app.add_flag("--exact-only", exact_only, "Only byte-identical duplicates");
-    app.add_flag("--similar-only", similar_only, "Only perceptually similar duplicates");
-    app.add_flag("--images-only", images_only, "Skip video files");
-    app.add_flag("--videos-only", videos_only, "Skip image files");
+    app.add_flag("--exact-only", exact_only, "Only byte-identical duplicates")
+        ->group("Matching");
+    app.add_flag("--similar-only", similar_only, "Only perceptually similar duplicates")
+        ->group("Matching");
+    app.add_flag("--images-only", images_only, "Skip video files")->group("Matching");
+    app.add_flag("--videos-only", videos_only, "Skip image files")->group("Matching");
+    app.add_flag("--verify", config.verify_bytes,
+                 "Confirm exact duplicates with a full byte comparison")
+        ->group("Matching");
+    app.add_flag("--transitive", transitive,
+                 "Merge clusters transitively (higher recall, risks chaining)")
+        ->group("Matching");
+    app.add_option("--keep", keeper,
+                   "Keeper policy: resolution, largest, oldest, newest, shortest")
+        ->check(CLI::IsMember({"resolution", "largest", "oldest", "newest", "shortest"}))
+        ->group("Matching");
 
     app.add_option("-t,--threshold", config.image.phash_threshold,
                    "Image similarity threshold in Hamming bits (0-64, default 10)")
-        ->check(CLI::Range(0u, 64u));
+        ->check(CLI::Range(0u, 64u))
+        ->group("Images");
     app.add_option("--color-threshold", config.image.color_threshold,
                    "Maximum chroma difference, 0-255 (255 disables the check)")
-        ->check(CLI::Range(0u, 255u));
+        ->check(CLI::Range(0u, 255u))
+        ->group("Images");
     app.add_flag("--rotations", config.image.dihedral_invariant,
-                 "Also match rotated and mirrored copies");
+                 "Also match rotated and mirrored copies")
+        ->group("Images");
 
     app.add_option("--video-samples", config.video.frame_samples,
                    "Keyframes sampled per video (1-32, default 16)")
-        ->check(CLI::Range(1u, static_cast<unsigned>(kMaxVideoFrames)));
+        ->check(CLI::Range(1u, static_cast<unsigned>(kMaxVideoFrames)))
+        ->group("Videos");
     app.add_option("--video-match", config.video.min_frame_match_ratio,
                    "Fraction of frames that must match (0-1, default 0.65)")
-        ->check(CLI::Range(0.0, 1.0));
+        ->check(CLI::Range(0.0, 1.0))
+        ->group("Videos");
     app.add_flag("--subclips", config.video.subclip_detection,
-                 "Detect a video contained within a longer one");
+                 "Detect a video contained within a longer one")
+        ->group("Videos");
 
-    app.add_option("--min-size", config.min_file_size, "Ignore files below this many bytes");
-    app.add_option("--max-size", config.max_file_size, "Ignore files above this many bytes");
+    app.add_option("--min-size", config.min_file_size,
+                   "Ignore files below this many bytes")
+        ->group("Selection");
+    app.add_option("--max-size", config.max_file_size,
+                   "Ignore files above this many bytes")
+        ->group("Selection");
     app.add_option("-x,--exclude", config.exclude_patterns,
-                   "Glob pattern to exclude (repeatable)");
-    app.add_option("--max-depth", config.max_depth, "Limit recursion depth (0 = unlimited)");
-    app.add_flag("--hidden", hidden, "Include hidden files");
-    app.add_flag("--follow-symlinks", config.follow_symlinks, "Follow symbolic links");
+                   "Glob pattern to exclude (repeatable)")
+        ->group("Selection");
+    app.add_option("--max-depth", config.max_depth,
+                   "Limit recursion depth (0 = unlimited)")
+        ->group("Selection");
+    app.add_flag("--hidden", hidden, "Include hidden files")->group("Selection");
+    app.add_flag("--follow-symlinks", config.follow_symlinks, "Follow symbolic links")
+        ->group("Selection");
     app.add_flag("--probe-all", config.probe_unknown_extensions,
-                 "Inspect every file, not just known media extensions");
+                 "Inspect every file, not just known media extensions")
+        ->group("Selection");
 
     app.add_option("-j,--threads", config.concurrency.cpu_threads,
-                   "Worker threads (0 = auto)");
+                   "Worker threads (0 = auto)")
+        ->group("Performance");
     app.add_flag("--cache", use_cache,
                  "Keep a signature cache so a rescan is free; written to the first scanned "
-                 "folder unless --cache-path says otherwise");
-    app.add_option("--cache-path", cache_path, "Cache database location (implies --cache)");
-    app.add_flag("--verify", config.verify_bytes,
-                 "Confirm exact duplicates with a full byte comparison");
-    app.add_flag("--transitive", transitive,
-                 "Merge clusters transitively (higher recall, risks chaining)");
-    app.add_option("--keep", keeper, "Keeper policy: resolution, largest, oldest, newest, shortest")
-        ->check(CLI::IsMember({"resolution", "largest", "oldest", "newest", "shortest"}));
-
-    app.add_flag("-q,--quiet", quiet, "Suppress progress output");
-    app.add_flag("--all-errors", all_errors, "List every unreadable file");
+                 "folder unless --cache-path says otherwise")
+        ->group("Performance");
+    app.add_option("--cache-path", cache_path, "Cache database location (implies --cache)")
+        ->group("Performance");
 
     app.add_flag("--delete", delete_duplicates,
-                 "Delete non-keeper members (dry run unless --confirm is also given)");
-    app.add_flag("--confirm", confirm, "Actually perform deletions requested by --delete");
+                 "Delete non-keeper members (dry run unless --confirm is also given)")
+        ->group("Deletion");
+    app.add_flag("--confirm", confirm, "Actually perform deletions requested by --delete")
+        ->group("Deletion");
 
     argv = app.ensure_utf8(argv);
     CLI11_PARSE(app, argc, argv);
