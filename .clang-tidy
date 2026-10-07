@@ -1,0 +1,4 @@
+Checks: '-*,bugprone-*,performance-*,portability-*'
+WarningsAsErrors: '*'
+HeaderFilterRegex: '(include[/\\]GhidraEngine|src)[/\\]'
+FormatStyle: file

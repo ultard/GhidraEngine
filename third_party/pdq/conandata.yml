@@ -1,0 +1,14 @@
+sources:
+  "cci.20261001":
+    commit: "ec3671bafc70136c4178ac300b75281ee4c6a0c6"
+    files:
+      "LICENSE": "68ecc6aafbd2a205a1077f86127030898f03091b7dae9d9017325a8702d8668f"
+      "pdq/cpp/common/pdqbasetypes.h": "2f047049969b07351c935e41da1b4c7000af19a354929a3df28d9c4f22b99b4b"
+      "pdq/cpp/common/pdqhamming.h": "c3314937e3edc01a7d20531e9baf4007049d6ea06a93ec25b6457025aaa84c62"
+      "pdq/cpp/common/pdqhashtypes.h": "06ae688a78cdb17fc0aeb88fec2abdf1cb35d73a38ed49a629af03bf07ae8d72"
+      "pdq/cpp/downscaling/downscaling.h": "1238e00188a29035b3440d4405f64fdbe933c5a042cdfef572e8a5ef07e5923a"
+      "pdq/cpp/downscaling/downscaling.cpp": "4f7cc18baaebf27650166b4c1569ef8b3faf615abc861d18250573995ba91688"
+      "pdq/cpp/hashing/pdqhashing.h": "2c9abab5bb03119d3c17410570d13ab0a3e496118a28849196a8c079dac3e6c4"
+      "pdq/cpp/hashing/pdqhashing.cpp": "2013379e258d8d0eb19c46049498aa72705db7a79014d3312b1f11b247fc0c51"
+      "pdq/cpp/hashing/torben.h": "d58b25e10d30de4137e53ea869008f911687851a19b5d25c091e56ec5030acf3"
+      "pdq/cpp/hashing/torben.cpp": "64f1e95edb168a2e07216fae2f7da2f64b3246f6d8c752657eead3142353f09e"

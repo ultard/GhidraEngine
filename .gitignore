@@ -1,0 +1,8 @@
+.idea/
+.cache/
+
+cmake-build-*/
+CMakeUserPresets.json
+
+/install/
+__pycache__/

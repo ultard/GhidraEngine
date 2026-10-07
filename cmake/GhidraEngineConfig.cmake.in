@@ -1,0 +1,13 @@
+@PACKAGE_INIT@
+
+if(NOT @BUILD_SHARED_LIBS@)
+    include(CMakeFindDependencyMacro)
+    find_dependency(blake3 CONFIG)
+    find_dependency(pdq CONFIG)
+    find_dependency(libvips CONFIG)
+    find_dependency(ffmpeg CONFIG)
+    find_dependency(Threads)
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/GhidraEngineTargets.cmake")
+check_required_components(GhidraEngine)
