@@ -176,14 +176,19 @@ std::set<std::filesystem::path> collect_paths(
     const std::size_t max_files,
     const FingerprintCache *cache,
     const std::stop_token &stop,
-    std::vector<ScanIssue> &issues
+    std::vector<ScanIssue> &issues,
+    const ScanProgressCallback &progress
 ) {
     std::set<std::filesystem::path> paths;
     const auto add = [&](const std::filesystem::path &path) {
-        paths.insert(path);
+        const bool added = paths.insert(path).second;
 
         if (paths.size() > max_files) {
             throw std::length_error("Scan exceeds unique file budget");
+        }
+
+        if (added && progress) {
+            progress({ScanProgressStage::Enumeration, paths.size(), 0, {}, path});
         }
     };
 
@@ -285,6 +290,7 @@ void store_cached_fingerprint(
 void process_file(
     ScannedFile &file,
     const FingerprintSettings &settings,
+    const bool generate_fingerprints,
     const Blake3Digest &settings_key,
     const FingerprintCache *cache,
     const std::stop_token &stop,
@@ -296,10 +302,14 @@ void process_file(
         before = file_state(file.path);
         file.size = before->size;
         file.digest = hash_blake3_file(file.path, stop);
-        load_cached_fingerprint(file, *file.digest, settings, settings_key, cache, issues);
+
+        if (generate_fingerprints) {
+            load_cached_fingerprint(file, *file.digest, settings, settings_key, cache, issues);
+        }
+
         check_stop(stop);
 
-        if (!file.fingerprint) {
+        if (generate_fingerprints && !file.fingerprint) {
             file.fingerprint = generate(file.path, settings, stop);
         }
 
@@ -312,14 +322,16 @@ void process_file(
             throw std::runtime_error("File changed while hashing/fingerprinting");
         }
 
-        store_cached_fingerprint(
-            file,
-            *file.fingerprint,
-            *file.digest,
-            settings_key,
-            cache,
-            issues
-        );
+        if (generate_fingerprints) {
+            store_cached_fingerprint(
+                file,
+                *file.fingerprint,
+                *file.digest,
+                settings_key,
+                cache,
+                issues
+            );
+        }
     } catch (const std::bad_alloc &) {
         throw;
     } catch (const std::exception &error) {
@@ -349,7 +361,19 @@ ScanResult scan_media(
     const FingerprintCache *cache,
     const std::stop_token &stop
 ) {
-    const auto settings_key = fingerprint_settings_key(options.fingerprints);
+    return scan_media(roots, options, cache, stop, {});
+}
+
+ScanResult scan_media(
+    const std::span<const std::filesystem::path> roots,
+    const ScanOptions &options,
+    const FingerprintCache *cache,
+    const std::stop_token &stop,
+    const ScanProgressCallback &progress
+) {
+    const auto settings_key = options.generate_fingerprints
+        ? fingerprint_settings_key(options.fingerprints)
+        : Blake3Digest{};
 
     if (roots.empty() || options.workers == 0 || options.workers > 256 || options.max_files == 0) {
         throw std::invalid_argument("Scan needs roots, 1..256 workers and a positive file budget");
@@ -358,8 +382,25 @@ ScanResult scan_media(
     check_stop(stop);
     const auto normalized_roots = normalize_roots(roots);
     ScanResult result;
-    const auto paths =
-        collect_paths(normalized_roots, options.max_files, cache, stop, result.issues);
+    // An exact-only scan ignores the cache, including its directory exclusion.
+    const auto active_cache = options.generate_fingerprints ? cache : nullptr;
+
+    if (progress) {
+        progress({ScanProgressStage::Enumeration, 0, 0, {}, {}});
+    }
+    const auto paths = collect_paths(
+        normalized_roots,
+        options.max_files,
+        active_cache,
+        stop,
+        result.issues,
+        progress
+    );
+
+    if (progress) {
+        progress({ScanProgressStage::Processing, paths.size(), 0, paths.size(), {}});
+    }
+
     result.files.reserve(paths.size());
 
     for (const auto &path : paths) {
@@ -370,6 +411,8 @@ ScanResult scan_media(
     std::atomic<std::size_t> next{0};
     std::exception_ptr fatal;
     std::mutex fatal_mutex;
+    std::mutex progress_mutex;
+    std::size_t completed = 0;
 
     std::stop_source cancellation;
     const std::stop_callback callback(stop, [&] {
@@ -389,11 +432,24 @@ ScanResult scan_media(
                 process_file(
                     result.files[position],
                     options.fingerprints,
+                    options.generate_fingerprints,
                     settings_key,
-                    cache,
+                    active_cache,
                     token,
                     issues[position]
                 );
+
+                if (progress) {
+                    std::lock_guard lock(progress_mutex);
+                    check_stop(token);
+                    progress(ScanProgress{
+                        .stage = ScanProgressStage::Processing,
+                        .discovered = paths.size(),
+                        .completed = ++completed,
+                        .total = paths.size(),
+                        .path = result.files[position].path
+                    });
+                }
             }
         } catch (...) {
             std::lock_guard lock(fatal_mutex);

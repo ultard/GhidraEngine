@@ -11,6 +11,7 @@ add_executable(ghidra_tests
     media/video_test.cpp
     media/vpdq_test.cpp
     scan/scanner_cache_test.cpp
+    scan/scan_progress_test.cpp
 )
 
 target_link_libraries(ghidra_tests
