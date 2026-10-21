@@ -183,7 +183,6 @@ const CpuKernels &cpu_kernels() noexcept {
         }
 
         if (const auto *popcnt = cpu_kernels_for(CpuBackend::Popcnt)) {
-            // Pair comparisons use POPCNT; pixel/validation kernels retain AVX2.
             result.distance = popcnt->distance;
             result.bounded = popcnt->bounded;
             result.distances = popcnt->distances;

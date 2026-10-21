@@ -6,14 +6,15 @@
 
 #include <vips/vips.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <limits>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -24,6 +25,8 @@
 namespace GhidraEngine {
 
 namespace {
+
+thread_local bool isolated_errors = false;
 
 struct Unref {
     template <class T>
@@ -50,7 +53,8 @@ void check_cancelled(const std::stop_token &stop) {
 }
 
 [[noreturn]] void fail(const std::filesystem::path &path, std::string_view stage) {
-    const std::unique_ptr<char, Free> detail(vips_error_buffer_copy());
+    // Read the global error log only when retrying a failed decode exclusively.
+    const std::unique_ptr<char, Free> detail(isolated_errors ? vips_error_buffer_copy() : nullptr);
     throw std::filesystem::filesystem_error(
         std::string(stage) + ": " + (detail ? detail.get() : "libvips failure"),
         path,
@@ -125,7 +129,11 @@ int metadata_integer(
 
 class Warnings {
 public:
-    Warnings() : handler_(g_log_set_handler("VIPS", G_LOG_LEVEL_WARNING, record, this)) {
+    Warnings() : previous_(current_) {
+        static const auto handler =
+            g_log_set_handler("VIPS", G_LOG_LEVEL_WARNING, record, nullptr);
+        (void)handler;
+        current_ = this;
     }
 
     Warnings(const Warnings &) = delete;
@@ -133,7 +141,7 @@ public:
     Warnings &operator=(const Warnings &) = delete;
 
     ~Warnings() {
-        g_log_remove_handler("VIPS", handler_);
+        current_ = previous_;
     }
 
     void check(const std::filesystem::path &path) const {
@@ -149,15 +157,56 @@ private:
         const gchar *message,
         gpointer context
     ) noexcept {
-        static_cast<Warnings *>(context)->seen_.store(true);
+        if (current_) {
+            current_->seen_.store(true);
+        }
+
+        // MinGW GLib temporarily replaces the process-wide CRT invalid-parameter
+        // handler while printing. Concurrent warnings must not interleave it.
+        static std::mutex log_mutex;
+        const std::lock_guard lock(log_mutex);
         g_log_default_handler(domain, level, message, nullptr);
     }
 
     std::atomic<bool> seen_{false};
-    guint handler_;
+    Warnings *previous_;
+    static inline thread_local Warnings *current_ = nullptr;
 };
 
-VipsPtr<VipsImage> load(const std::filesystem::path &path, VipsAccess access) {
+class EvaluationCancellation {
+public:
+    EvaluationCancellation(VipsImage *image, const std::stop_token &stop)
+        : image_(image), stop_(stop) {
+        if (stop_.stop_possible()) {
+            vips_image_set_progress(image_, TRUE);
+            handler_ = g_signal_connect(image_, "eval", G_CALLBACK(cancel), this);
+        }
+    }
+
+    EvaluationCancellation(const EvaluationCancellation &) = delete;
+    EvaluationCancellation &operator=(const EvaluationCancellation &) = delete;
+
+    ~EvaluationCancellation() {
+        if (handler_ != 0) {
+            g_signal_handler_disconnect(image_, handler_);
+        }
+    }
+
+private:
+    static void cancel(VipsImage *image, VipsProgress *, gpointer context) noexcept {
+        const auto &evaluation = *static_cast<EvaluationCancellation *>(context);
+
+        if (evaluation.stop_.stop_requested()) {
+            vips_image_set_kill(image, TRUE);
+        }
+    }
+
+    VipsImage *image_;
+    const std::stop_token &stop_;
+    gulong handler_ = 0;
+};
+
+VipsPtr<VipsImage> load(const std::filesystem::path &path, VipsAccess access, int shrink = 1) {
     const auto utf8 = path.u8string();
     const auto *filename = reinterpret_cast<const char *>(utf8.c_str());
 
@@ -172,15 +221,25 @@ VipsPtr<VipsImage> load(const std::filesystem::path &path, VipsAccess access) {
         fail(path, "Cannot open image source");
     }
 
-    VipsPtr<VipsImage> image(vips_image_new_from_source(
-        source.get(),
-        "",
-        "access",
-        access,
-        "fail_on",
-        VIPS_FAIL_ON_WARNING,
-        nullptr
-    ));
+    VipsPtr<VipsImage> image;
+
+    if (shrink == 1) {
+        image.reset(vips_image_new_from_source(
+            source.get(), "", "access", access, "fail_on", VIPS_FAIL_ON_WARNING, nullptr
+        ));
+    } else {
+        image.reset(vips_image_new_from_source(
+            source.get(),
+            "",
+            "access",
+            access,
+            "fail_on",
+            VIPS_FAIL_ON_WARNING,
+            "shrink",
+            shrink,
+            nullptr
+        ));
+    }
 
     if (!image) {
         fail(path, "Cannot load image header");
@@ -190,6 +249,15 @@ VipsPtr<VipsImage> load(const std::filesystem::path &path, VipsAccess access) {
 }
 
 VipsPtr<VipsImage> convert_colors(VipsImage *input, const std::filesystem::path &path) {
+    if (vips_image_get_typeof(input, VIPS_META_ICC_NAME) == 0 &&
+        vips_image_get_interpretation(input) == VIPS_INTERPRETATION_sRGB &&
+        vips_image_get_format(input) == VIPS_FORMAT_UCHAR &&
+        vips_image_get_bands(input) == 3) {
+        g_object_ref(input);
+
+        return VipsPtr<VipsImage>(input);
+    }
+
     VipsImage *output = nullptr;
 
     if (vips_image_get_typeof(input, VIPS_META_ICC_NAME) != 0) {
@@ -355,6 +423,7 @@ struct NativePixels {
     unsigned bands;
     VipsBandFormat format;
     std::unique_ptr<std::uint8_t[]> data;
+    std::unique_ptr<void, Free> sink_data;
 };
 
 DecodedImage read_luma(
@@ -367,7 +436,9 @@ DecodedImage read_luma(
     const auto height = pixels.height;
     DecodedImage result{width, height, std::vector<float>(width * height)};
     const auto bands = pixels.bands;
-    const auto *data = pixels.data.get();
+    const auto *data = pixels.sink_data
+        ? static_cast<const std::uint8_t *>(pixels.sink_data.get())
+        : pixels.data.get();
     const auto channel_size =
         pixels.format == VIPS_FORMAT_DOUBLE   ? sizeof(double) :
         pixels.format == VIPS_FORMAT_FLOAT    ? sizeof(float) :
@@ -434,20 +505,65 @@ VipsPtr<VipsImage> prepare_pixels(
         reject(path, "EXIF orientation must be in [1, 8]");
     }
 
-    if (orientation > 2) {
-        image = load(path, VIPS_ACCESS_RANDOM);
+    // JPEG's DCT decoder can discard high-frequency pixels before allocating them.
+    // Validate the original header and profile before replacing it with a scaled load.
+    int shrink = 1;
+
+    if (options.target_dimension != 0) {
+        const char *name = nullptr;
+        if (vips_image_get_typeof(image.get(), "vips-loader") != 0 &&
+            vips_image_get_string(image.get(), "vips-loader", &name) == 0 &&
+            name && std::string_view(name).find("jpeg") != std::string_view::npos) {
+            const auto edge = static_cast<std::size_t>(std::max(
+                vips_image_get_width(image.get()), vips_image_get_height(image.get())
+            ));
+            while (shrink < 8 && edge / (shrink * 2) >= options.target_dimension) {
+                shrink *= 2;
+            }
+            if (shrink > 1 && vips_image_get_typeof(image.get(), VIPS_META_ICC_NAME) != 0) {
+                const auto validated = normalize(image.get(), path);
+                warnings.check(path);
+            }
+        }
+    }
+
+    if (shrink > 1 || orientation > 2) {
+        image = load(
+            path,
+            orientation > 2 ? VIPS_ACCESS_RANDOM : VIPS_ACCESS_SEQUENTIAL,
+            shrink
+        );
         validate_dimensions(image.get(), path, options);
     }
 
     VipsImage *output = nullptr;
 
-    if (vips_autorot(image.get(), &output, nullptr) != 0) {
+    if (orientation == 1) {
+        g_object_ref(image.get());
+        output = image.get();
+    } else if (vips_autorot(image.get(), &output, nullptr) != 0) {
         fail(path, "Cannot apply EXIF orientation");
     }
 
     const VipsPtr<VipsImage> oriented(output);
     validate_dimensions(oriented.get(), path, options);
     auto pixels = normalize(oriented.get(), path);
+    const auto edge = static_cast<std::size_t>(std::max(
+        vips_image_get_width(pixels.get()), vips_image_get_height(pixels.get())
+    ));
+    // Keep alpha and HDR compositing in the existing full-resolution path.
+    if (options.target_dimension != 0 && edge > options.target_dimension &&
+        vips_image_get_bands(pixels.get()) == 3 &&
+        vips_image_get_format(pixels.get()) == VIPS_FORMAT_UCHAR) {
+        const auto scale = static_cast<double>(options.target_dimension) / static_cast<double>(edge);
+
+        if (vips_resize(
+                pixels.get(), &output, scale, "kernel", VIPS_KERNEL_LANCZOS3, nullptr
+            ) != 0) {
+            fail(path, "Cannot reduce image for fingerprinting");
+        }
+        pixels.reset(output);
+    }
     warnings.check(path);
 
     return pixels;
@@ -473,13 +589,10 @@ DecodedImage decode_image(
         reject(path, "Image input must be a regular file");
     }
 
-    const auto native = [&] {
-        // ponytail: libvips 8.16 has global errors/warnings; only native work needs this lock.
-        static std::mutex decoder_mutex;
-        const std::lock_guard lock(decoder_mutex);
+    initialize();
+    static std::shared_mutex decoder_mutex;
+    const auto decode_native = [&] {
         check_cancelled(stop);
-        initialize();
-        vips_error_clear();
 
         const Warnings warnings;
         const auto pixels = prepare_pixels(path, options, warnings);
@@ -488,9 +601,32 @@ DecodedImage decode_image(
             static_cast<std::size_t>(vips_image_get_height(pixels.get())),
             static_cast<unsigned>(vips_image_get_bands(pixels.get())),
             vips_image_get_format(pixels.get()),
+            {},
             {}
         };
         const auto row_bytes = VIPS_IMAGE_SIZEOF_LINE(pixels.get());
+
+        // The native sink batches evaluation and uses libvips' reusable worker pool.
+        // Tiny inputs are cheaper to evaluate directly without scheduling a sink.
+        if (result.width * result.height >= 4096) {
+            const EvaluationCancellation cancellation(pixels.get(), stop);
+            std::size_t length = 0;
+            result.sink_data.reset(vips_image_write_to_memory(pixels.get(), &length));
+            check_cancelled(stop);
+
+            if (!result.sink_data) {
+                fail(path, "Cannot decode image pixels");
+            }
+
+            if (length != row_bytes * result.height) {
+                reject(path, "Decoded pixel size does not match image dimensions");
+            }
+
+            warnings.check(path);
+
+            return result;
+        }
+
         result.data = std::make_unique_for_overwrite<std::uint8_t[]>(row_bytes * result.height);
         const VipsPtr<VipsRegion> region(vips_region_new(pixels.get()));
 
@@ -498,7 +634,7 @@ DecodedImage decode_image(
             fail(path, "Cannot create image region");
         }
 
-        // Evaluate rows directly; write_to_memory starts a sink thread even for small images.
+        // Keep cancellation and warning attribution on the caller for tiny inputs.
         for (std::size_t y = 0; y < result.height; ++y) {
             check_cancelled(stop);
             const VipsRect rect{0, static_cast<int>(y), static_cast<int>(result.width), 1};
@@ -518,6 +654,29 @@ DecodedImage decode_image(
         check_cancelled(stop);
 
         return result;
+    };
+
+    const auto native = [&] {
+        try {
+            const std::shared_lock lock(decoder_mutex);
+            return decode_native();
+        } catch (const std::filesystem::filesystem_error &) {
+            // libvips shares its diagnostic buffer. Retry errors without other decodes
+            // running, so diagnostics and strict warning rejection remain file-specific.
+        }
+        const std::unique_lock lock(decoder_mutex);
+        check_cancelled(stop);
+        vips_error_clear();
+        struct Isolate {
+            Isolate() {
+                isolated_errors = true;
+            }
+
+            ~Isolate() {
+                isolated_errors = false;
+            }
+        } isolate;
+        return decode_native();
     }();
 
     auto result = read_luma(native, path, options, stop);

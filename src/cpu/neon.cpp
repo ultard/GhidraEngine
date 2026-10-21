@@ -220,7 +220,7 @@ bool neon_valid_luma(std::span<const float> luma) noexcept {
 }
 
 const CpuKernels &neon_kernels() noexcept {
-    static const CpuKernels kernels{
+    static constexpr CpuKernels kernels{
         "neon",
         neon_distance,
         neon_bounded,

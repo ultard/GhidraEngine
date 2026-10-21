@@ -41,9 +41,7 @@ void detail::compute_pdq_variants(
         throw std::invalid_argument(dimension_error);
     }
 
-    const bool valid_luma = detail::cpu_kernels().valid_luma(luma);
-
-    if (!valid_luma) {
+    if (const bool valid_luma = cpu_kernels().valid_luma(luma); !valid_luma) {
         throw std::invalid_argument("PDQ luma must be finite and in [0, 255]");
     }
 
@@ -117,7 +115,11 @@ void detail::compute_pdq_variants(
     compute_pdq_variants(luma, width, height, output, workspace);
 }
 
-PdqFingerprint compute_pdq(std::span<const float> luma, std::size_t width, std::size_t height) {
+PdqFingerprint compute_pdq(
+    std::span<const float> luma,
+    std::size_t width,
+    std::size_t height
+) {
     PdqFingerprint result;
     detail::compute_pdq_variants(luma, width, height, std::span{&result, 1});
 

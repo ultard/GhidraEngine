@@ -4,6 +4,7 @@
 #include "../support/test_support.hpp"
 
 #include <gtest/gtest.h>
+#include <vips/vips.h>
 
 #include <algorithm>
 #include <array>
@@ -88,6 +89,139 @@ TEST(ImageDecode, JpegOrientationRotatesDecodedPixels) {
             );
         }
     }
+}
+
+TEST(ImageDecode, FastDecodeBoundsRgbPixelsAndPreservesOrientationAndLimits) {
+    ImageDecodeOptions options;
+    options.target_dimension = 256;
+    const auto original = decode_image(fixture("image/bridge.jpg"), options);
+    const auto rotated = decode_image(fixture("image/orientation-6.jpg"), options);
+
+    EXPECT_LE(std::max(original.width, original.height), 256U);
+    EXPECT_EQ(rotated.width, original.height);
+    EXPECT_EQ(rotated.height, original.width);
+    EXPECT_EQ(rotated.luma.size(), original.luma.size());
+
+    const auto large = decode_image(fixture("image/fast-large.jpg"), options);
+    EXPECT_EQ(large.width, 256U);
+    EXPECT_EQ(large.height, 128U);
+    EXPECT_EQ(decode_image(fixture("image/fast-large.jpg")).width, 2048U);
+
+    const auto small = decode_image(fixture("image/rgb8.png"), options);
+    EXPECT_EQ(small.luma, decode_image(fixture("image/rgb8.png")).luma);
+
+    for (const auto *name : {"invalid-icc.png", "truncated.jpg", "oversized.png", "animated.gif"}) {
+        EXPECT_THROW(
+            (void)decode_image(fixture(std::string("image/") + name), options),
+            std::filesystem::filesystem_error
+        );
+    }
+
+    options.max_pixels = 6;
+    EXPECT_THROW((void)decode_image(fixture("image/bridge.jpg"), options),
+        std::filesystem::filesystem_error);
+}
+
+TEST(ImageDecode, ConcurrentFailuresDoNotRejectValidFastImages) {
+    std::array<std::future<void>, 8> workers;
+    ImageDecodeOptions options;
+    options.target_dimension = 256;
+    const auto expected = decode_image(fixture("image/bridge.jpg"), options).luma;
+
+    for (std::size_t i = 0; i < workers.size(); ++i) {
+        workers[i] = std::async(std::launch::async, [&, i] {
+            for (unsigned attempt = 0; attempt < 10; ++attempt) {
+                if (i % 2 == 0) {
+                    EXPECT_THROW((void)decode_image(fixture("image/truncated.jpg"), options),
+                        std::filesystem::filesystem_error);
+                } else {
+                    EXPECT_EQ(decode_image(fixture("image/bridge.jpg"), options).luma, expected);
+                }
+            }
+        });
+    }
+    for (auto &worker : workers) {
+        worker.get();
+    }
+}
+
+TEST(ImageDecode, NativeSinkPreservesLargeRgb8AndRgb16Pixels) {
+    const TempDirectory directory;
+    constexpr std::size_t width = 128;
+    constexpr std::size_t height = 64;
+    std::vector<float> expected;
+    expected.reserve(width * height);
+
+    for (const unsigned depth : {8U, 16U}) {
+        std::string bytes = "P6\n128 64\n" + std::string(depth == 8 ? "255\n" : "65535\n");
+
+        for (std::size_t y = 0; y < height; ++y) {
+            for (std::size_t x = 0; x < width; ++x) {
+                const std::array<unsigned, 3> rgb{
+                    static_cast<unsigned>((x * 3 + y * 5) % 256),
+                    static_cast<unsigned>((x * 7 + y * 11) % 256),
+                    static_cast<unsigned>((x * 13 + y * 17) % 256)
+                };
+
+                if (depth == 8) {
+                    expected.push_back(luma(rgb[0], rgb[1], rgb[2]));
+                }
+
+                for (const auto channel : rgb) {
+                    if (depth == 16) {
+                        bytes.push_back(static_cast<char>(channel));
+                    }
+                    bytes.push_back(static_cast<char>(channel));
+                }
+            }
+        }
+
+        const auto path = directory.path() / ("rgb" + std::to_string(depth) + ".ppm");
+        write_file(path, bytes);
+        const auto image = decode_image(path);
+
+        EXPECT_EQ(image.width, width);
+        EXPECT_EQ(image.height, height);
+        EXPECT_EQ(image.luma, expected);
+    }
+}
+
+TEST(ImageDecode, CancellationDuringNativeSinkReturnsNoPartialImage) {
+    (void)decode_image(fixture("image/rgb8.png"));
+    const auto signal = g_signal_lookup("eval", vips_image_get_type());
+    ASSERT_NE(signal, 0U);
+    std::stop_source stop;
+    const auto hook = g_signal_add_emission_hook(
+        signal,
+        0,
+        [](GSignalInvocationHint *, guint, const GValue *, gpointer context) -> gboolean {
+            static_cast<std::stop_source *>(context)->request_stop();
+
+            return TRUE;
+        },
+        &stop,
+        nullptr
+    );
+    ASSERT_NE(hook, 0U);
+
+    struct RemoveHook {
+        guint signal;
+        gulong hook;
+
+        ~RemoveHook() {
+            g_signal_remove_emission_hook(signal, hook);
+        }
+    } cleanup{signal, hook};
+
+    try {
+        (void)decode_image(fixture("image/fast-large.jpg"), {}, stop.get_token());
+        FAIL() << "Native evaluation returned an image after cancellation";
+    } catch (const std::system_error &error) {
+        EXPECT_EQ(error.code(), std::errc::operation_canceled);
+    }
+
+    EXPECT_TRUE(stop.stop_requested());
+    EXPECT_EQ(decode_image(fixture("image/rgb8.png")).luma.size(), 6U);
 }
 
 TEST(ImageDecode, AlphaAndUnsigned16BitSamplesUseDefinedRounding) {

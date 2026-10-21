@@ -33,6 +33,11 @@ inline void check_decode_options(const ImageDecodeOptions &options) {
         options.max_pixels > std::numeric_limits<std::size_t>::max() / (4 * sizeof(double))) {
         throw std::invalid_argument(error);
     }
+
+    if (options.target_dimension != 0 &&
+        (options.target_dimension < 64 || options.target_dimension > options.max_dimension)) {
+        throw std::invalid_argument("Image target dimension must be zero or in [64, max_dimension]");
+    }
 }
 
 inline void check_decode_options(const VideoDecodeOptions &options) {

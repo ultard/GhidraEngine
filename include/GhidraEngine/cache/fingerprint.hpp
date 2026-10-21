@@ -18,7 +18,7 @@ enum class MediaKinds : std::uint8_t {
 
 struct FingerprintSettings {
     MediaKinds kinds = MediaKinds::Both;
-    ImageDecodeOptions image;
+    ImageDecodeOptions image{.target_dimension = 256};
     TransformPolicy transforms = TransformPolicy::OriginalOnly;
     VpdqGenerationOptions video;
 };

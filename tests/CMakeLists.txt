@@ -20,6 +20,7 @@ target_link_libraries(ghidra_tests
         GTest::gtest_main
         Threads::Threads
         PDQ::pdq
+        libvips::vips
 )
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

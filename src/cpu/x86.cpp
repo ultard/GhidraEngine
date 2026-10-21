@@ -309,7 +309,7 @@ GHIDRAENGINE_AVX2 void avx_luma16(
 }
 
 const CpuKernels &popcnt_kernels() noexcept {
-    static const CpuKernels kernels{
+    static constexpr CpuKernels kernels{
         "popcnt",
         pop_distance,
         pop_bounded,
@@ -324,7 +324,7 @@ const CpuKernels &popcnt_kernels() noexcept {
 }
 
 const CpuKernels &avx2_kernels() noexcept {
-    static const CpuKernels kernels{
+    static constexpr CpuKernels kernels{
         "avx2",
         avx_distance,
         avx_bounded,

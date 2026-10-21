@@ -3,6 +3,7 @@
 
 #include <GhidraEngine/cache/fingerprint.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -11,13 +12,14 @@
 #include <span>
 #include <stop_token>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace GhidraEngine {
 
 struct ScanOptions {
     FingerprintSettings fingerprints;
-    std::size_t workers = 1;
+    std::size_t workers = std::clamp<std::size_t>(std::thread::hardware_concurrency(), 1, 256);
     std::size_t max_files = 1'000'000;
     bool generate_fingerprints = true;
 };

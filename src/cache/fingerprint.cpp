@@ -125,13 +125,15 @@ Blake3Digest fingerprint_settings_key(const FingerprintSettings &settings) {
     }
 
     constexpr std::string_view revision =
-        "GhidraEngine-generation-2;hdr-reinhard-203;"
+        "GhidraEngine-generation-3;image-shrink;hdr-reinhard-203;"
         "pdq-ec3671b;vips-8.16.0;ffmpeg-8.0;blake3-1.8.5";
+
     const auto revision_bytes = std::as_bytes(std::span(revision.data(), revision.size()));
 
     std::vector bytes(revision_bytes.begin(), revision_bytes.end());
     append(bytes, static_cast<std::uint8_t>(settings.kinds));
     append_decode(bytes, settings.image);
+    append(bytes, settings.image.target_dimension);
 
     append(bytes, static_cast<std::uint8_t>(settings.transforms));
     append_decode(bytes, settings.video.decode);

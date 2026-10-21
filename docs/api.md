@@ -45,6 +45,10 @@ no partial digest. Cancellation cannot interrupt a blocking read. Keep input con
 embedded ICC color to sRGB. The result is tightly packed owning float luma. Dimension and pixel
 limits are checked before pixel evaluation. `ImageDecodeOptions` defaults to maximum dimension
 32768, maximum 40,000,000 pixels, white alpha background, and default HDR settings.
+`target_dimension` defaults to zero (full resolution); otherwise it must be in
+[64, `max_dimension`]. It limits the longest RGB8 edge, using JPEG shrink-on-load followed
+by Lanczos3 reduction. Alpha and HDR inputs retain full resolution. `FingerprintSettings`
+defaults to a target of 256 for scans. Full-resolution PDQ compatibility requires target zero.
 
 | Input                                         | Handling                               |
 |-----------------------------------------------|----------------------------------------|
@@ -62,14 +66,24 @@ integer rounding. Luma is `0.299f*R + 0.587f*G + 0.114f*B`, without linearizatio
 
 ### Native resources and cancellation
 
-libvips initializes once with concurrency 1 and its operation cache disabled. Native decoding
-and error attribution use a global lock. Conversion of owning pixel buffers to luma and tone
-mapping happen outside that lock. Double RGBA may require 32 bytes per pixel, plus output luma
-and decoder storage.
+libvips initializes once with concurrency 1 and its operation cache disabled. Successful native
+decodes run concurrently with thread-local warning attribution. Failed decodes are retried
+under an exclusive lock before reading the global error buffer, so diagnostics are associated
+with the correct file. Conversion of owning pixel buffers to luma and tone mapping happens
+after native decoding. Double RGBA may require 32 bytes per pixel, plus output luma and decoder
+storage.
+
+Images with at least 4,096 output pixels use `vips_image_write_to_memory`, which batches
+evaluation through libvips' reusable worker pool. The returned GLib allocation is owned
+directly, without copying it into a second native pixel buffer. Tiny inputs retain direct
+row evaluation. Identity orientation and already-sRGB RGB8 color conversions do not add
+graph nodes; shrink and rotation share a reload when both are required. MinGW warning
+printing is serialized to protect GLib's process-wide CRT handler changes.
 
 Other libvips users must coordinate process-wide settings, error handling, and shutdown. Keep
-files stable. Cancellation checks run between native/luma rows and around native calls; they
-cannot interrupt a blocking codec operation.
+files stable. Cancellation checks run between native/luma rows and around native calls.
+Native sink progress checks request libvips evaluation cancellation; a blocking codec call
+still has to return before cancellation is observed.
 
 ### PDQ computation and encoding
 
@@ -191,7 +205,8 @@ uses the inverse OETF and luminance-dependent display OOTF. A fixed-luminance Re
 linear RGB to SDR sRGB8 with gamut clipping and nearest-integer rounding.
 
 This policy produces deterministic fingerprints. It does not render for display or apply dynamic
-HDR10+/Dolby Vision metadata. Generation revision 2 includes both HDR settings in the cache key;
+HDR10+/Dolby Vision metadata. Generation revision 3 includes both HDR settings and the image
+target dimension in the cache key;
 SDR pixel semantics remain unchanged. Transfer equations follow
 [ITU-R BT.2100-2](https://www.itu.int/dms_pubrec/itu-r/rec/bt/R-REC-BT.2100-2-201807-S%21%21PDF-E.pdf).
 
@@ -263,7 +278,8 @@ names remain distinct; hardlinks remain separate paths. Cache directory paths re
 creation, and scanning excludes that directory. Sorting assigns deterministic local IDs.
 
 Roots must be non-empty and each root must resolve to a regular file or real directory.
-`workers` must be in [1, 256], and `max_files` must be positive. Unique-file and retained-frame
+`workers` defaults to hardware concurrency clamped to [1, 256] and must stay within that range.
+`max_files` must be positive. Unique-file and retained-frame
 budgets bound stored results. When both media kinds are enabled, image probing precedes video
 probing. There is no nested pool.
 

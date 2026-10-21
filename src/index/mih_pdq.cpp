@@ -272,6 +272,7 @@ std::vector<PdqHit> MihPdqIndex::search_within(
     measured.posting_visits = candidates.size();
     std::ranges::sort(candidates);
     candidates.erase(std::ranges::unique(candidates).begin(), candidates.end());
+
     measured.candidates_verified = candidates.size();
     std::vector<PdqHit> hits;
     const auto bounded = detail::cpu_kernels().bounded;

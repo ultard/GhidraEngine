@@ -175,7 +175,10 @@ TEST(Scanner, DirectoryJunctionsAreRejectedAsRootsAndNeverTraversed) {
 TEST(FingerprintCache, EachGenerationSettingChangesKeyAndInvalidSettingsFail) {
     const auto baseline = fingerprint_settings_key({});
     using Change = void (*)(FingerprintSettings &);
-    const std::array<Change, 15> changes{
+    const std::array<Change, 16> changes{
+        [](auto &s) {
+            s.image.target_dimension = 0;
+        },
         [](auto &s) {
             s.image.hdr.exposure = 2;
         },
@@ -242,7 +245,10 @@ TEST(FingerprintCache, EachGenerationSettingChangesKeyAndInvalidSettingsFail) {
         EXPECT_NE(fingerprint_settings_key(s), baseline);
     }
 
-    const std::array<Change, 9> invalid{
+    const std::array<Change, 10> invalid{
+        [](auto &s) {
+            s.image.target_dimension = 63;
+        },
         [](auto &s) {
             s.image.hdr.exposure = 0;
         },

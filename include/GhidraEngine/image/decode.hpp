@@ -18,6 +18,7 @@ struct HdrToneMapOptions {
 };
 
 struct ImageDecodeOptions {
+    std::size_t target_dimension = 0;
     std::size_t max_dimension = 32768;
     std::size_t max_pixels = 40'000'000;
     std::array<std::uint8_t, 3> alpha_background = {255, 255, 255};
